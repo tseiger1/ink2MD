@@ -1,0 +1,255 @@
+import { App, PluginSettingTab, Setting } from 'obsidian';
+import Ink2MDPlugin from './main';
+import { Ink2MDSettings, LLMProvider } from './types';
+
+const DEFAULT_PROMPT = `Convert handwritten notes to markdown. Treat all supplied pages as one note.
+
+If a task has a due date, format it in the following pattern:
+- [ ] Task text 📅 2026-01-21
+If a task has an exclamation mark, make it high priority:
+- [!] Task text ...
+If there is a star symbol, convert it to a #star tag.
+If text is highlighted, make it bold.
+If there is a drawn flow convert it to mermaid.
+If there is just a drawing, ignore it.
+Convert tables to markdown tables.
+
+Return plain markdown without any additional text or annotations.`;
+
+export const DEFAULT_SETTINGS: Ink2MDSettings = {
+  inputDirectories: [],
+  includeImages: true,
+  includePdfs: true,
+  includeEInk: false,
+  maxImageWidth: 768,
+  outputFolder: 'Ink2MD',
+  llmProvider: 'openai',
+  openAI: {
+    apiKey: '',
+    model: 'gpt-4o-mini',
+    promptTemplate: DEFAULT_PROMPT,
+  },
+  local: {
+    endpoint: 'http://localhost:11434/v1/chat/completions',
+    apiKey: '',
+    model: 'llama-vision',
+    promptTemplate: DEFAULT_PROMPT,
+  },
+};
+
+export class Ink2MDSettingTab extends PluginSettingTab {
+  plugin: Ink2MDPlugin;
+
+  constructor(app: App, plugin: Ink2MDPlugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    containerEl.createEl('h2', { text: 'Ink2MD' });
+
+    this.renderDirectories(containerEl);
+    this.renderFormatToggles(containerEl);
+    this.renderConversion(containerEl);
+    this.renderLLMSettings(containerEl);
+  }
+
+  private renderDirectories(containerEl: HTMLElement) {
+    new Setting(containerEl)
+      .setName('Input directories')
+      .setDesc('Absolute file-system paths, one per line. Sub-directories are scanned automatically.')
+      .addTextArea((text) => {
+        text
+          .setPlaceholder('/Volumes/notes')
+          .setValue(this.plugin.settings.inputDirectories.join('\n'))
+          .onChange(async (value) => {
+            this.plugin.settings.inputDirectories = value
+              .split('\n')
+              .map((line) => line.trim())
+              .filter(Boolean);
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.rows = 4;
+      });
+
+    new Setting(containerEl)
+      .setName('Output folder')
+      .setDesc('Folder that will be created inside the vault to store PNGs and Markdown files.')
+      .addText((text) =>
+        text
+          .setPlaceholder('Ink2MD')
+          .setValue(this.plugin.settings.outputFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.outputFolder = value.trim() || 'Ink2MD';
+            await this.plugin.saveSettings();
+          }),
+      );
+  }
+
+  private renderFormatToggles(containerEl: HTMLElement) {
+    new Setting(containerEl)
+      .setName('Image imports')
+      .setDesc('Enable to import .png, .jpg, and .webp files.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.includeImages)
+          .onChange(async (value) => {
+            this.plugin.settings.includeImages = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('PDF imports')
+      .setDesc('Enable to import PDF notebooks (each page becomes a PNG).')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.includePdfs)
+          .onChange(async (value) => {
+            this.plugin.settings.includePdfs = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('E-ink imports (experimental stub)')
+      .setDesc('Placeholder module that reports discovered files without converting them yet.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.includeEInk)
+          .onChange(async (value) => {
+            this.plugin.settings.includeEInk = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+  }
+
+  private renderConversion(containerEl: HTMLElement) {
+    new Setting(containerEl)
+      .setName('Max PNG width')
+      .setDesc('Images wider than this value are scaled down to preserve storage and improve LLM throughput.')
+      .addSlider((slider) =>
+        slider
+          .setLimits(512, 4096, 64)
+          .setValue(this.plugin.settings.maxImageWidth)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.maxImageWidth = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+  }
+
+  private renderLLMSettings(containerEl: HTMLElement) {
+    new Setting(containerEl)
+      .setName('LLM provider')
+      .setDesc('Switch between OpenAI vision models and a local OpenAI-compatible endpoint (e.g., llama).')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('openai', 'OpenAI')
+          .addOption('local', 'Local (OpenAI compatible)')
+          .setValue(this.plugin.settings.llmProvider)
+          .onChange(async (value) => {
+            this.plugin.settings.llmProvider = value as LLMProvider;
+            await this.plugin.saveSettings();
+            this.display();
+          }),
+      );
+
+    if (this.plugin.settings.llmProvider === 'openai') {
+      this.renderOpenAISettings(containerEl);
+    } else {
+      this.renderLocalSettings(containerEl);
+    }
+  }
+
+  private renderOpenAISettings(containerEl: HTMLElement) {
+    new Setting(containerEl)
+      .setName('API key')
+      .setDesc('Stored locally inside the vault data. Required for OpenAI calls.')
+      .addText((text) =>
+        text
+          .setPlaceholder('sk-...')
+          .setValue(this.plugin.settings.openAI.apiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.openAI.apiKey = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Model')
+      .setDesc('Vision-capable model such as gpt-4o-mini or o4-mini-high.')
+      .addText((text) =>
+        text
+          .setValue(this.plugin.settings.openAI.model)
+          .onChange(async (value) => {
+            this.plugin.settings.openAI.model = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    this.renderPromptSetting(containerEl, 'openAI');
+  }
+
+  private renderLocalSettings(containerEl: HTMLElement) {
+    new Setting(containerEl)
+      .setName('Endpoint URL')
+      .setDesc('HTTP endpoint that accepts OpenAI-compatible chat completions requests.')
+      .addText((text) =>
+        text
+          .setPlaceholder('http://localhost:11434/v1/chat/completions')
+          .setValue(this.plugin.settings.local.endpoint)
+          .onChange(async (value) => {
+            this.plugin.settings.local.endpoint = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('API key (optional)')
+      .setDesc('Sent as Bearer token in the Authorization header when present.')
+      .addText((text) =>
+        text
+          .setPlaceholder('secret')
+          .setValue(this.plugin.settings.local.apiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.local.apiKey = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Model name')
+      .setDesc('LLM identifier understood by your local server (e.g., llama-vision).')
+      .addText((text) =>
+        text
+          .setValue(this.plugin.settings.local.model)
+          .onChange(async (value) => {
+            this.plugin.settings.local.model = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    this.renderPromptSetting(containerEl, 'local');
+  }
+
+  private renderPromptSetting(containerEl: HTMLElement, provider: 'openAI' | 'local') {
+    const config = this.plugin.settings[provider];
+    new Setting(containerEl)
+      .setName('Prompt template')
+      .setDesc('Instructions prepended to the LLM request. Keep it concise to reduce latency.')
+      .addTextArea((text) => {
+        text
+          .setValue(config.promptTemplate)
+          .onChange(async (value) => {
+            config.promptTemplate = value.trim();
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.rows = 4;
+      });
+  }
+}
