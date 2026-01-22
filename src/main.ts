@@ -409,6 +409,7 @@ interface FreshnessResult {
 		  attachmentMaxWidth,
 		  llmMaxWidth,
 		  pdfDpi,
+		  includeSupernote: stored?.includeSupernote ?? DEFAULT_SETTINGS.includeSupernote,
 		  replaceExisting,
 		  openAI: {
 		    ...DEFAULT_SETTINGS.openAI,

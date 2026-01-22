@@ -18,6 +18,7 @@
   "license": "0-BSD",
   "devDependencies": {
     "@eslint/js": "9.30.1",
+    "@types/color": "^4.2.0",
     "@types/node": "^16.11.6",
     "esbuild": "0.25.5",
     "eslint-plugin-obsidianmd": "0.1.9",
@@ -28,8 +29,10 @@
     "typescript-eslint": "8.35.1"
   },
   "dependencies": {
+    "jszip": "^3.10.1",
     "obsidian": "latest",
     "openai": "^6.16.0",
-    "pdfjs-dist": "^5.4.530"
+    "pdfjs-dist": "^5.4.530",
+    "supernote-typescript": "^0.3.0"
   }
 }

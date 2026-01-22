@@ -1,4 +1,4 @@
-export type InputFormat = 'image' | 'pdf' | 'eink';
+export type InputFormat = 'image' | 'pdf' | 'supernote';
 
 export interface NoteSource {
   id: string;
@@ -49,7 +49,7 @@ export interface Ink2MDSettings {
   inputDirectories: string[];
   includeImages: boolean;
   includePdfs: boolean;
-  includeEInk: boolean;
+  includeSupernote: boolean;
   attachmentMaxWidth: number;
   llmMaxWidth: number;
   pdfDpi: number;

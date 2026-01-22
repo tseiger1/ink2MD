@@ -18,8 +18,9 @@
 
 
 
+
 .ink2md-status-icon.is-spinning {
-  animation: ink2md-pen-cycle 1.2s ease-in-out infinite;
+  animation: ink2md-pen-cycle 1.5s ease-in-out infinite;
 }
 
 
@@ -36,7 +37,7 @@
   transform: translate(-50%, -50%) scale(0.25);
   left: 50%;
   top: 50%;
-  animation: ink2md-loop 1.2s ease-in-out infinite;
+  animation: ink2md-loop 1.5s ease-in-out infinite;
   pointer-events: none;
 }
 

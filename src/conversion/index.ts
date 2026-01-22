@@ -1,6 +1,7 @@
 import { ConvertedNote, NoteSource } from '../types';
 import { convertImageSource } from './imageConversion';
 import { convertPdfSource } from './pdfConversion';
+import { convertSupernoteSource } from './supernoteConversion';
 
 export interface ConversionOptions {
   attachmentMaxWidth: number;
@@ -17,7 +18,10 @@ export async function convertSourceToPng(
   if (source.format === 'pdf') {
     return convertPdfSource(source, options.attachmentMaxWidth, options.pdfDpi);
   }
+  if (source.format === 'supernote') {
+    return convertSupernoteSource(source, options.attachmentMaxWidth);
+  }
 
-  console.info(`[ink2md] E-ink conversion is not implemented yet. Skipping ${source.filePath}`);
+  console.info(`[ink2md] Unsupported format ${source.format}. Skipping ${source.filePath}`);
   return null;
 }

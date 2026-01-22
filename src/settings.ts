@@ -20,7 +20,7 @@ export const DEFAULT_SETTINGS: Ink2MDSettings = {
   inputDirectories: [],
   includeImages: true,
   includePdfs: true,
-  includeEInk: false,
+  includeSupernote: true,
   attachmentMaxWidth: 0,
   llmMaxWidth: 512,
   pdfDpi: 300,
@@ -121,13 +121,13 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('E-ink imports (experimental stub)')
-      .setDesc('Placeholder module that reports discovered files without converting them yet.')
+      .setName('Supernote imports (.note)')
+      .setDesc('Enable importing Supernote notebooks. Requires restart after toggling.')
       .addToggle((toggle) =>
         toggle
-          .setValue(this.plugin.settings.includeEInk)
+          .setValue(this.plugin.settings.includeSupernote)
           .onChange(async (value) => {
-            this.plugin.settings.includeEInk = value;
+            this.plugin.settings.includeSupernote = value;
             await this.plugin.saveSettings();
           }),
       );

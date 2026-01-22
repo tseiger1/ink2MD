@@ -3,7 +3,7 @@ import type { Stats } from 'fs';
 import { Ink2MDSettings, NoteSource } from '../types';
 import { collectImageSources } from './imageImporter';
 import { collectPdfSources } from './pdfImporter';
-import { collectEInkSources } from './einkImporter';
+import { collectSupernoteSources } from './supernoteImporter';
 
 async function isDirectory(pathStr: string): Promise<boolean> {
   let stats: Stats;
@@ -38,8 +38,8 @@ export async function discoverNoteSources(settings: Ink2MDSettings): Promise<Not
     sources.push(...await collectPdfSources(validDirs));
   }
 
-  if (settings.includeEInk) {
-    sources.push(...await collectEInkSources(validDirs));
+  if (settings.includeSupernote) {
+    sources.push(...await collectSupernoteSources(validDirs));
   }
 
   return sources;
