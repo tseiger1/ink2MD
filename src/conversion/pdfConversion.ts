@@ -7,7 +7,11 @@ import { PDF_WORKER_SOURCE } from '../pdfWorkerSource';
 const WORKER_URL = createWorkerUrl();
 pdfjsLib.GlobalWorkerOptions.workerSrc = WORKER_URL;
 
-export async function convertPdfSource(source: NoteSource, maxWidth: number): Promise<ConvertedNote | null> {
+export async function convertPdfSource(
+  source: NoteSource,
+  maxWidth: number,
+  pdfDpi: number,
+): Promise<ConvertedNote | null> {
   let pdf: PDFDocumentProxy | undefined;
   try {
     const data = new Uint8Array(await fs.readFile(source.filePath));
@@ -17,9 +21,10 @@ export async function convertPdfSource(source: NoteSource, maxWidth: number): Pr
     const pages: ConvertedPage[] = [];
     for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex++) {
       const page = await pdf.getPage(pageIndex);
-      const viewport = page.getViewport({ scale: 1 });
-      const scale = viewport.width > maxWidth && maxWidth > 0 ? maxWidth / viewport.width : 1;
-      const scaledViewport = page.getViewport({ scale });
+      const dpiScale = pdfDpi > 0 ? pdfDpi / 72 : 1;
+      const baseViewport = page.getViewport({ scale: dpiScale });
+      const limitScale = maxWidth > 0 && baseViewport.width > maxWidth ? maxWidth / baseViewport.width : 1;
+      const scaledViewport = page.getViewport({ scale: dpiScale * limitScale });
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(scaledViewport.width);
       canvas.height = Math.round(scaledViewport.height);

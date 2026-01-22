@@ -1,8 +1,28 @@
-/*
+.ink2md-status {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.ink2md-status-icon {
+	display: inline-flex;
+	align-items: center;
+}
 
-If your plugin does not need CSS, delete this file.
+.ink2md-status-icon.is-clickable {
+	cursor: pointer;
+	color: var(--text-accent);
+}
 
-*/
+.ink2md-status-icon.is-spinning {
+	animation: ink2md-spin 1s linear infinite;
+}
+
+@keyframes ink2md-spin {
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
+}

@@ -1,6 +1,6 @@
 import { MarkdownGenerationContext } from '../types';
 
-export function buildMarkdown({ note, llmMarkdown, imagePaths }: MarkdownGenerationContext): string {
+export function buildMarkdown({ note, llmMarkdown, imageEmbeds }: MarkdownGenerationContext): string {
   const frontMatter = [
     '---',
     `source: ${note.source.filePath}`,
@@ -10,16 +10,20 @@ export function buildMarkdown({ note, llmMarkdown, imagePaths }: MarkdownGenerat
     '---',
   ].join('\n');
 
-  const gallery = imagePaths.map((image) => `![[${image}]]`).join('\n\n');
+  const gallery = imageEmbeds
+    .map(({ path, width }, index) => {
+      const widthAttr = width ? ` width=\"${Math.round(width)}\"` : '';
+      return `<img src=\"${path}\" alt=\"Page ${index + 1}\"${widthAttr} />`;
+    })
+    .join('\n\n');
 
   return [
     frontMatter,
     '',
+    llmMarkdown.trim(),
+    '',
     '## Pages',
     gallery,
-    '',
-    '## AI summary',
-    llmMarkdown.trim(),
   ]
     .filter(Boolean)
     .join('\n\n');

@@ -21,7 +21,9 @@ export const DEFAULT_SETTINGS: Ink2MDSettings = {
   includeImages: true,
   includePdfs: true,
   includeEInk: false,
-  maxImageWidth: 768,
+  attachmentMaxWidth: 0,
+  llmMaxWidth: 512,
+  pdfDpi: 300,
   outputFolder: 'Ink2MD',
   llmProvider: 'openai',
   openAI: {
@@ -129,15 +131,43 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
   private renderConversion(containerEl: HTMLElement) {
     new Setting(containerEl)
-      .setName('Max PNG width')
-      .setDesc('Images wider than this value are scaled down to preserve storage and improve LLM throughput.')
+      .setName('Attachment PNG width')
+      .setDesc('Images saved to the vault will be scaled down when wider than this value. Set to 0 to keep the original size.')
       .addSlider((slider) =>
         slider
-          .setLimits(512, 4096, 64)
-          .setValue(this.plugin.settings.maxImageWidth)
+          .setLimits(0, 4096, 64)
+          .setValue(this.plugin.settings.attachmentMaxWidth)
           .setDynamicTooltip()
           .onChange(async (value) => {
-            this.plugin.settings.maxImageWidth = value;
+            this.plugin.settings.attachmentMaxWidth = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('LLM PNG width')
+      .setDesc('Pages sent to the LLM are optionally downscaled separately to reduce bandwidth and tokens. Set to 0 to keep the original size.')
+      .addSlider((slider) =>
+        slider
+          .setLimits(0, 2048, 32)
+          .setValue(this.plugin.settings.llmMaxWidth)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.llmMaxWidth = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('PDF render DPI')
+      .setDesc('Controls the base resolution when rasterizing PDF pages. Higher values improve fidelity at the cost of larger files.')
+      .addSlider((slider) =>
+        slider
+          .setLimits(72, 600, 12)
+          .setValue(this.plugin.settings.pdfDpi)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.pdfDpi = value;
             await this.plugin.saveSettings();
           }),
       );

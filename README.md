@@ -20,7 +20,7 @@ Open **Settings → Community plugins → Ink2MD** and adjust:
 - Input directories: absolute OS paths; sub-folders are scanned automatically.
 - Output folder: vault-relative folder where PNG files and Markdown live.
 - Formats: toggle image, PDF, and e-ink discovery modules.
-- Conversion: pick the maximum PNG width to avoid bloated files.
+- Conversion: pick separate PNG width caps for files stored in the vault and for the LLM payloads (set a slider to 0 to keep originals) plus a dedicated DPI value for PDF rasterization.
 - LLM provider:
   - **OpenAI**: add your API key, preferred vision-capable model, and prompt template.
   - **Local**: specify the endpoint URL (must speak the OpenAI Chat Completions protocol), optional API key, model name, and prompt.

@@ -40,7 +40,9 @@ export interface Ink2MDSettings {
   includeImages: boolean;
   includePdfs: boolean;
   includeEInk: boolean;
-  maxImageWidth: number;
+  attachmentMaxWidth: number;
+  llmMaxWidth: number;
+  pdfDpi: number;
   outputFolder: string;
   llmProvider: LLMProvider;
   openAI: OpenAIProviderSettings;
@@ -50,5 +52,5 @@ export interface Ink2MDSettings {
 export interface MarkdownGenerationContext {
   note: ConvertedNote;
   llmMarkdown: string;
-  imagePaths: string[];
+  imageEmbeds: Array<{ path: string; width: number }>;
 }
