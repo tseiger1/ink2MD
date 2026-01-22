@@ -24,6 +24,7 @@ export interface OpenAIProviderSettings {
   apiKey: string;
   model: string;
   promptTemplate: string;
+  imageDetail: 'low' | 'high';
 }
 
 export interface LocalProviderSettings {
@@ -31,6 +32,15 @@ export interface LocalProviderSettings {
   apiKey: string;
   model: string;
   promptTemplate: string;
+  imageDetail: 'low' | 'high';
+}
+
+export interface ProcessedSourceInfo {
+  hash: string;
+  size: number;
+  mtimeMs: number;
+  processedAt: string;
+  outputFolder: string;
 }
 
 export type LLMProvider = 'openai' | 'local';
@@ -43,10 +53,12 @@ export interface Ink2MDSettings {
   attachmentMaxWidth: number;
   llmMaxWidth: number;
   pdfDpi: number;
+  replaceExisting: boolean;
   outputFolder: string;
   llmProvider: LLMProvider;
   openAI: OpenAIProviderSettings;
   local: LocalProviderSettings;
+  processedSources: Record<string, ProcessedSourceInfo>;
 }
 
 export interface MarkdownGenerationContext {

@@ -1,19 +1,28 @@
-import { Notice, Plugin, normalizePath, setIcon } from 'obsidian';
+import { promises as fs } from 'fs';
+import { Notice, Plugin, normalizePath, setIcon, setTooltip } from 'obsidian';
 import { DEFAULT_SETTINGS, Ink2MDSettingTab } from './settings';
-import type { Ink2MDSettings, ConvertedNote } from './types';
+import type { Ink2MDSettings, ConvertedNote, NoteSource, ProcessedSourceInfo } from './types';
 import { discoverNoteSources } from './importers';
 import { convertSourceToPng } from './conversion';
 import { LLMService } from './llm';
 import { buildMarkdown } from './markdown/generator';
+import { hashFile } from './utils/hash';
 
-export default class Ink2MDPlugin extends Plugin {
-  settings: Ink2MDSettings;
-  private statusBarEl: HTMLElement | null = null;
-  private statusIconEl: HTMLElement | null = null;
-  private statusTextEl: HTMLElement | null = null;
-  private isImporting = false;
-  private cancelRequested = false;
-  private abortController: AbortController | null = null;
+type SourceFingerprint = Omit<ProcessedSourceInfo, 'processedAt' | 'outputFolder'>;
+interface FreshnessResult {
+	shouldProcess: boolean;
+	fingerprint?: SourceFingerprint;
+	previousFolder?: string;
+}
+
+	export default class Ink2MDPlugin extends Plugin {
+	settings: Ink2MDSettings;
+	private statusBarEl: HTMLElement | null = null;
+	private statusIconEl: HTMLElement | null = null;
+	private isImporting = false;
+	private cancelRequested = false;
+	private abortController: AbortController | null = null;
+	private pendingSpinnerStop = false;
 
   async onload() {
     await this.loadSettings();
@@ -50,57 +59,63 @@ export default class Ink2MDPlugin extends Plugin {
 			new Notice('Ink2MD: configure at least one input directory.');
 			finalStatus = 'Configuration required';
 			this.setStatus(finalStatus);
-			this.statusIconEl?.setAttr('aria-label', 'Ink2MD: configure input directories');
 			return;
 		}
 
 		new Notice('Ink2MD: scanning input directories...');
 		this.setStatus('Scanning for handwritten notes...');
-		this.statusIconEl?.setAttr('aria-label', 'Ink2MD: scanning inputs');
 		const sources = await discoverNoteSources(this.settings);
 
-      if (!sources.length) {
-      new Notice('Ink2MD: no new handwritten files found.');
-      this.statusIconEl?.setAttr('aria-label', 'Ink2MD: no sources found');
-      finalStatus = 'No sources found';
-      return;
-    }
+		if (!sources.length) {
+			new Notice('Ink2MD: no new handwritten files found.');
+			finalStatus = 'No sources found';
+			this.setStatus(finalStatus);
+			return;
+		}
 
       let llm: LLMService;
-      try {
-        llm = new LLMService(this.settings);
-      } catch (error) {
-        console.error(error);
-        new Notice('Ink2MD: unable to initialize the selected LLM provider.');
-        finalStatus = 'LLM initialization failed';
-        this.statusIconEl?.setAttr('aria-label', 'Ink2MD: LLM initialization failed');
-        return;
-      }
+		try {
+			llm = new LLMService(this.settings);
+		} catch (error) {
+			console.error(error);
+			new Notice('Ink2MD: unable to initialize the selected LLM provider.');
+			finalStatus = 'LLM initialization failed';
+			this.setStatus(finalStatus);
+			return;
+		}
 
-      let processed = 0;
-      let cancelled = false;
-      for (const source of sources) {
-        if (this.cancelRequested) {
-          cancelled = true;
-          break;
-        }
+		let processed = 0;
+		let cancelled = false;
+		for (const source of sources) {
+			if (this.cancelRequested) {
+				cancelled = true;
+				break;
+			}
 
-        this.setStatus(`Processing ${processed + 1}/${sources.length}: ${source.basename}`);
-        this.statusIconEl?.setAttr('aria-label', `Ink2MD: processing ${processed + 1}/${sources.length} - ${source.basename}`);
-        const converted = await convertSourceToPng(source, {
-          attachmentMaxWidth: this.settings.attachmentMaxWidth,
-          pdfDpi: this.settings.pdfDpi,
-        });
-        if (!converted) {
-          continue;
-        }
+			const freshness = await this.evaluateSourceFreshness(source);
+			if (!freshness.shouldProcess) {
+				continue;
+			}
 
-        if (this.cancelRequested) {
-          cancelled = true;
-          break;
-        }
+			const reusePath = this.settings.replaceExisting ? freshness.previousFolder : undefined;
 
-		this.statusIconEl?.setAttr('aria-label', `Ink2MD: generating summary ${processed + 1}/${sources.length}`);
+			this.setStatus(`Processing ${processed + 1}/${sources.length}: ${source.basename}`);
+			const converted = await convertSourceToPng(source, {
+				attachmentMaxWidth: this.settings.attachmentMaxWidth,
+				pdfDpi: this.settings.pdfDpi,
+			});
+			if (!converted) {
+				continue;
+			}
+
+			const folderPath = await this.ensureNoteFolder(converted.source.basename, reusePath);
+
+			if (this.cancelRequested) {
+				cancelled = true;
+				break;
+			}
+
+		this.setStatus(`Reading handwriting ${processed + 1}/${sources.length}`);
 		let llmMarkdown = '';
 		try {
 			llmMarkdown = await llm.generateMarkdown(converted, this.abortController?.signal);
@@ -118,29 +133,30 @@ export default class Ink2MDPlugin extends Plugin {
           break;
         }
 
-        this.statusIconEl?.setAttr('aria-label', `Ink2MD: writing note ${processed + 1}/${sources.length}`);
-        await this.persistNote(converted, llmMarkdown);
-        processed += 1;
-      }
+		this.setStatus(`Writing note ${processed + 1}/${sources.length}`);
+			await this.persistNote(converted, llmMarkdown, folderPath);
+			await this.rememberProcessedSource(source, freshness.fingerprint, folderPath);
+			processed += 1;
+		}
 
-      if (cancelled) {
-        finalStatus = 'Cancelled';
-        this.statusIconEl?.setAttr('aria-label', 'Ink2MD: import cancelled');
-        new Notice('Ink2MD: import cancelled.');
-      } else {
-        new Notice(`Ink2MD: imported ${processed} note${processed === 1 ? '' : 's'}.`);
-        finalStatus = 'Idle';
-        this.statusIconEl?.setAttr('aria-label', 'Ink2MD: idle');
-      }
+		if (cancelled) {
+			finalStatus = 'Cancelled';
+			this.setStatus(finalStatus);
+			new Notice('Ink2MD: import cancelled.');
+		} else {
+			new Notice(`Ink2MD: imported ${processed} note${processed === 1 ? '' : 's'}.`);
+			finalStatus = 'Idle';
+			this.setStatus(finalStatus);
+		}
     } finally {
       this.finishImport(finalStatus);
     }
   }
 
-  private async persistNote(note: ConvertedNote, llmMarkdown: string) {
-    const adapter = this.app.vault.adapter;
-    const folderPath = await this.ensureNoteFolder(note.source.basename);
-    const imageEmbeds: Array<{ path: string; width: number }> = [];
+	private async persistNote(note: ConvertedNote, llmMarkdown: string, targetFolder?: string) {
+		const adapter = this.app.vault.adapter;
+		const folderPath = targetFolder ?? (await this.ensureNoteFolder(note.source.basename));
+		const imageEmbeds: Array<{ path: string; width: number }> = [];
 
     for (const page of note.pages) {
       const imagePath = normalizePath(`${folderPath}/${page.fileName}`);
@@ -162,40 +178,60 @@ export default class Ink2MDPlugin extends Plugin {
     await adapter.write(markdownPath, markdown);
   }
 
-  private setStatus(message: string) {
-    this.statusTextEl?.setText('');
-  }
+	private setStatus(message: string) {
+		if (this.statusIconEl) {
+			setTooltip(this.statusIconEl, message, {
+				placement: 'top',
+				delay: 0,
+			});
+		}
+	}
 
-  private setupStatusBar() {
-    this.statusBarEl = this.addStatusBarItem();
-    this.statusBarEl.addClass('ink2md-status');
-    this.statusIconEl = this.statusBarEl.createSpan({ cls: 'ink2md-status-icon' });
-    this.statusIconEl.addEventListener('click', () => {
-      if (this.isImporting) {
-        if (this.cancelRequested) {
-          return;
-        }
-        this.cancelRequested = true;
-        this.abortController?.abort();
-        this.statusIconEl?.setAttr('aria-label', 'Ink2MD: cancelling...');
-        new Notice('Ink2MD: cancelling current import...');
-        return;
-      }
-      this.triggerImport().catch((error) => console.error(error));
-    });
-    this.setSpinner(false);
-    this.setStatus('Idle');
-  }
+	private setupStatusBar() {
+		this.statusBarEl = this.addStatusBarItem();
+		this.statusBarEl.addClass('ink2md-status');
+		this.statusIconEl = this.statusBarEl.createSpan({ cls: 'ink2md-status-icon' });
+		this.statusIconEl.addEventListener('animationiteration', () => {
+			if (this.pendingSpinnerStop) {
+				this.statusIconEl?.classList.remove('is-spinning');
+				this.pendingSpinnerStop = false;
+			}
+		});
+		this.statusIconEl.addEventListener('click', () => {
+			if (this.isImporting) {
+				if (this.cancelRequested) {
+					return;
+				}
+				this.cancelRequested = true;
+				this.abortController?.abort();
+				this.setStatus('Cancelling...');
+				new Notice('Ink2MD: cancelling current import...');
+				return;
+			}
+			this.triggerImport().catch((error) => console.error(error));
+		});
+		this.setSpinner(false);
+		this.setStatus('Idle');
+	}
 
 	private setSpinner(active: boolean) {
-		if (!this.statusIconEl) {
+		const icon = this.statusIconEl;
+		if (!icon) {
 			return;
 		}
-		setIcon(this.statusIconEl, active ? 'loader' : 'pen-tool');
-		this.statusIconEl.toggleClass('is-spinning', active);
-		this.statusIconEl.toggleClass('is-clickable', active);
-		if (!active) {
-			this.statusIconEl.setAttr('aria-label', 'Ink2MD: idle');
+		setIcon(icon, 'pen-tool');
+		icon.classList.add('is-clickable');
+		if (active) {
+			this.pendingSpinnerStop = false;
+			icon.classList.add('is-spinning');
+			icon.style.animationPlayState = 'running';
+		} else {
+			if (icon.classList.contains('is-spinning')) {
+				this.pendingSpinnerStop = true;
+				icon.style.animationPlayState = 'running';
+			} else {
+				this.pendingSpinnerStop = false;
+			}
 		}
 	}
 
@@ -205,53 +241,188 @@ export default class Ink2MDPlugin extends Plugin {
 		this.abortController = null;
 		if (this.cancelRequested) {
 			this.setStatus('Cancelled');
-			this.statusIconEl?.setAttr('aria-label', 'Ink2MD: cancelled');
 			this.cancelRequested = false;
 			return;
 		}
 		this.setStatus(finalStatus);
-		this.statusIconEl?.setAttr('aria-label', `Ink2MD: ${finalStatus.toLowerCase()}`);
 	}
 
-  private async ensureNoteFolder(baseName: string): Promise<string> {
-    const adapter = this.app.vault.adapter;
-    const root = normalizePath(this.settings.outputFolder || 'Ink2MD');
-    if (!(await adapter.exists(root))) {
-      await adapter.mkdir(root);
-    }
+	private ensureProcessedStore() {
+		if (!this.settings.processedSources) {
+			this.settings.processedSources = {};
+		}
+		return this.settings.processedSources;
+	}
 
-    let candidate = normalizePath(`${root}/${baseName}`);
-    let counter = 1;
-    while (await adapter.exists(candidate)) {
-      counter += 1;
-      candidate = normalizePath(`${root}/${baseName}-${counter}`);
-    }
+	private async evaluateSourceFreshness(source: NoteSource): Promise<FreshnessResult> {
+		const store = this.ensureProcessedStore();
+		let stats;
+		try {
+			stats = await fs.stat(source.filePath);
+		} catch (error) {
+			console.warn(`[ink2md] Unable to stat ${source.filePath}`, error);
+			return { shouldProcess: true };
+		}
 
-    await adapter.mkdir(candidate);
-    return candidate;
-  }
+		const cached = store[source.id];
+		const previousFolder = cached?.outputFolder;
+		if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+			return { shouldProcess: false, previousFolder };
+		}
 
-  async loadSettings() {
-    const stored = (await this.loadData()) as (Partial<Ink2MDSettings> & { maxImageWidth?: number }) | null;
-    const attachmentMaxWidth = stored?.attachmentMaxWidth ?? stored?.maxImageWidth ?? DEFAULT_SETTINGS.attachmentMaxWidth;
-    const llmMaxWidth = stored?.llmMaxWidth ?? attachmentMaxWidth ?? DEFAULT_SETTINGS.llmMaxWidth;
-    const pdfDpi = stored?.pdfDpi ?? DEFAULT_SETTINGS.pdfDpi;
-    this.settings = {
-      ...DEFAULT_SETTINGS,
-      ...(stored ?? {}),
-      attachmentMaxWidth,
-      llmMaxWidth,
-      pdfDpi,
-      openAI: {
-        ...DEFAULT_SETTINGS.openAI,
-        ...(stored?.openAI ?? {}),
-      },
-      local: {
-        ...DEFAULT_SETTINGS.local,
-        ...(stored?.local ?? {}),
-      },
-    } as Ink2MDSettings;
-  }
+		let hash: string;
+		try {
+			hash = await hashFile(source.filePath);
+		} catch (error) {
+			console.warn(`[ink2md] Unable to hash ${source.filePath}`, error);
+			return { shouldProcess: true, previousFolder };
+		}
+
+		if (cached && cached.hash === hash) {
+			store[source.id] = {
+				...cached,
+				hash,
+				size: stats.size,
+				mtimeMs: stats.mtimeMs,
+			};
+			await this.saveSettings();
+			return { shouldProcess: false, previousFolder };
+		}
+
+		return {
+			shouldProcess: true,
+			fingerprint: {
+				hash,
+				size: stats.size,
+				mtimeMs: stats.mtimeMs,
+			},
+			previousFolder,
+		};
+	}
+
+	private async rememberProcessedSource(source: NoteSource, fingerprint?: SourceFingerprint, folderPath?: string) {
+		const store = this.ensureProcessedStore();
+		const finalFingerprint = fingerprint ?? (await this.computeFingerprint(source));
+		if (!finalFingerprint) {
+			return;
+		}
+		const previous = store[source.id];
+		const outputFolder = folderPath ?? previous?.outputFolder ?? '';
+		store[source.id] = {
+			...finalFingerprint,
+			processedAt: new Date().toISOString(),
+			outputFolder,
+		};
+		await this.saveSettings();
+	}
+
+	private async computeFingerprint(source: NoteSource): Promise<SourceFingerprint | null> {
+		let stats;
+		try {
+			stats = await fs.stat(source.filePath);
+		} catch (error) {
+			console.warn(`[ink2md] Unable to stat ${source.filePath} for fingerprint`, error);
+			return null;
+		}
+		try {
+			const hash = await hashFile(source.filePath);
+			return {
+				hash,
+				size: stats.size,
+				mtimeMs: stats.mtimeMs,
+			};
+		} catch (error) {
+			console.warn(`[ink2md] Unable to hash ${source.filePath}`, error);
+			return null;
+		}
+	}
+
+	private async resetFolder(folderPath: string) {
+		const adapter = this.app.vault.adapter as unknown as { rmdir?: (path: string, recursive?: boolean) => Promise<void> };
+		if (await this.app.vault.adapter.exists(folderPath)) {
+			if (typeof adapter.rmdir === 'function') {
+				try {
+					await adapter.rmdir(folderPath, true);
+				} catch (error) {
+					console.warn(`[ink2md] Unable to remove folder ${folderPath}`, error);
+				}
+			} else {
+				const listing = await this.app.vault.adapter.list(folderPath);
+				for (const file of listing.files) {
+					await this.app.vault.adapter.remove(file);
+				}
+				for (const folder of listing.folders) {
+					await this.resetFolder(folder);
+				}
+				try {
+					await this.app.vault.adapter.remove(folderPath);
+				} catch (error) {
+					console.warn(`[ink2md] Unable to remove folder ${folderPath}`, error);
+				}
+			}
+		}
+		await this.app.vault.adapter.mkdir(folderPath);
+	}
+
+	private async ensureNoteFolder(baseName: string, reusePath?: string): Promise<string> {
+		const adapter = this.app.vault.adapter;
+		const root = normalizePath(this.settings.outputFolder || 'Ink2MD');
+		if (!(await adapter.exists(root))) {
+			await adapter.mkdir(root);
+		}
+
+		if (reusePath) {
+			const normalizedReuse = normalizePath(reusePath);
+			if (await adapter.exists(normalizedReuse)) {
+				if (this.settings.replaceExisting) {
+					await this.resetFolder(normalizedReuse);
+				}
+				return normalizedReuse;
+			}
+		}
+
+		let candidate = normalizePath(`${root}/${baseName}`);
+		let counter = 1;
+		while (await adapter.exists(candidate)) {
+			if (this.settings.replaceExisting) {
+				await this.resetFolder(candidate);
+				return candidate;
+			}
+			counter += 1;
+			candidate = normalizePath(`${root}/${baseName}-${counter}`);
+		}
+
+		await adapter.mkdir(candidate);
+		return candidate;
+	}
+
+	async loadSettings() {
+		const stored = (await this.loadData()) as (Partial<Ink2MDSettings> & { maxImageWidth?: number }) | null;
+		const attachmentMaxWidth = stored?.attachmentMaxWidth ?? stored?.maxImageWidth ?? DEFAULT_SETTINGS.attachmentMaxWidth;
+		const llmMaxWidth = stored?.llmMaxWidth ?? attachmentMaxWidth ?? DEFAULT_SETTINGS.llmMaxWidth;
+		const pdfDpi = stored?.pdfDpi ?? DEFAULT_SETTINGS.pdfDpi;
+		const processedSources = { ...(stored?.processedSources ?? DEFAULT_SETTINGS.processedSources) };
+		const replaceExisting = stored?.replaceExisting ?? DEFAULT_SETTINGS.replaceExisting;
+		this.settings = {
+		  ...DEFAULT_SETTINGS,
+		  ...(stored ?? {}),
+		  attachmentMaxWidth,
+		  llmMaxWidth,
+		  pdfDpi,
+		  replaceExisting,
+		  openAI: {
+		    ...DEFAULT_SETTINGS.openAI,
+		    ...(stored?.openAI ?? {}),
+		    imageDetail: stored?.openAI?.imageDetail ?? DEFAULT_SETTINGS.openAI.imageDetail,
+		  },
+		  local: {
+		    ...DEFAULT_SETTINGS.local,
+		    ...(stored?.local ?? {}),
+		    imageDetail: stored?.local?.imageDetail ?? DEFAULT_SETTINGS.local.imageDetail,
+		  },
+		  processedSources,
+		} as Ink2MDSettings;
+	}
 
   async saveSettings() {
     await this.saveData(this.settings);

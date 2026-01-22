@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
+import { App, Modal, Notice, PluginSettingTab, Setting } from 'obsidian';
 import Ink2MDPlugin from './main';
 import { Ink2MDSettings, LLMProvider } from './types';
 
@@ -24,19 +24,23 @@ export const DEFAULT_SETTINGS: Ink2MDSettings = {
   attachmentMaxWidth: 0,
   llmMaxWidth: 512,
   pdfDpi: 300,
+  replaceExisting: false,
   outputFolder: 'Ink2MD',
   llmProvider: 'openai',
   openAI: {
     apiKey: '',
     model: 'gpt-4o-mini',
     promptTemplate: DEFAULT_PROMPT,
+    imageDetail: 'low',
   },
   local: {
     endpoint: 'http://localhost:11434/v1/chat/completions',
     apiKey: '',
     model: 'llama-vision',
     promptTemplate: DEFAULT_PROMPT,
+    imageDetail: 'low',
   },
+  processedSources: {},
 };
 
 export class Ink2MDSettingTab extends PluginSettingTab {
@@ -171,6 +175,35 @@ export class Ink2MDSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
       );
+
+    new Setting(containerEl)
+      .setName('Replace existing notes')
+      .setDesc('When enabled, reprocessing a file overwrites the existing note and attachments.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.replaceExisting)
+          .onChange(async (value) => {
+            this.plugin.settings.replaceExisting = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Processed files cache')
+      .setDesc('Reset the list of already-processed sources if files were removed externally.')
+      .addButton((button) =>
+        button
+          .setButtonText('Reset cache')
+          .onClick(async () => {
+            const confirmed = await this.confirmReset();
+            if (!confirmed) {
+              return;
+            }
+            this.plugin.settings.processedSources = {};
+            await this.plugin.saveSettings();
+            new Notice('Ink2MD: processed file cache cleared.');
+          }),
+      );
   }
 
   private renderLLMSettings(containerEl: HTMLElement) {
@@ -222,6 +255,20 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           }),
       );
 
+    new Setting(containerEl)
+      .setName('Image detail')
+      .setDesc('Controls the quality detail level sent to the vision model.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('low', 'Low')
+          .addOption('high', 'High')
+          .setValue(this.plugin.settings.openAI.imageDetail)
+          .onChange(async (value) => {
+            this.plugin.settings.openAI.imageDetail = value === 'high' ? 'high' : 'low';
+            await this.plugin.saveSettings();
+          }),
+      );
+
     this.renderPromptSetting(containerEl, 'openAI');
   }
 
@@ -264,6 +311,20 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           }),
       );
 
+    new Setting(containerEl)
+      .setName('Image detail')
+      .setDesc('Choose how much detail the local vision endpoint should receive.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('low', 'Low')
+          .addOption('high', 'High')
+          .setValue(this.plugin.settings.local.imageDetail)
+          .onChange(async (value) => {
+            this.plugin.settings.local.imageDetail = value === 'high' ? 'high' : 'low';
+            await this.plugin.saveSettings();
+          }),
+      );
+
     this.renderPromptSetting(containerEl, 'local');
   }
 
@@ -281,5 +342,40 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           });
         text.inputEl.rows = 4;
       });
+  }
+
+  private async confirmReset(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const modal = new class extends Modal {
+        constructor(app: App, private readonly onConfirm: (result: boolean) => void) {
+          super(app);
+        }
+
+        onOpen() {
+          const { contentEl } = this;
+          contentEl.createEl('h3', { text: 'Reset processed files?' });
+          contentEl.createEl('p', {
+            text: 'This clears the cache of already-imported files so the next import reprocesses everything.',
+          });
+          const buttonBar = contentEl.createDiv('ink2md-modal-buttons');
+          const cancel = buttonBar.createEl('button', { text: 'Cancel' });
+          const confirm = buttonBar.createEl('button', { text: 'Reset' });
+          confirm.addClass('mod-warning');
+          cancel.addEventListener('click', () => {
+            this.close();
+            this.onConfirm(false);
+          });
+          confirm.addEventListener('click', () => {
+            this.close();
+            this.onConfirm(true);
+          });
+        }
+
+        onClose() {
+          this.contentEl.empty();
+        }
+      }(this.app, resolve);
+      modal.open();
+    });
   }
 }

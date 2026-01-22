@@ -21,7 +21,15 @@ export class LocalVisionProvider {
 			model: this.config.model,
 			messages: [
 				{ role: 'system', content: SYSTEM_PROMPT },
-				{ role: 'user', content: await buildVisionContent(note, this.config.promptTemplate, llmMaxWidth) },
+				{
+					role: 'user',
+					content: await buildVisionContent(
+						note,
+						this.config.promptTemplate,
+						llmMaxWidth,
+						this.config.imageDetail,
+					),
+				},
 			],
 		};
 
@@ -46,21 +54,22 @@ export class LocalVisionProvider {
 }
 
 async function buildVisionContent(
-  note: ConvertedNote,
-  promptTemplate: string,
-  llmMaxWidth: number,
+	note: ConvertedNote,
+	promptTemplate: string,
+	llmMaxWidth: number,
+	detail: 'low' | 'high',
 ): Promise<VisionContent> {
-  const content: VisionContent = [
-    { type: 'text', text: `${promptTemplate}\nTitle: ${note.source.basename}` },
-  ];
+	const content: VisionContent = [
+		{ type: 'text', text: `${promptTemplate}\nTitle: ${note.source.basename}` },
+	];
 
-  for (const page of note.pages) {
-    const imageUrl = await scalePngBufferToDataUrl(page.data, llmMaxWidth);
-    content.push({
-      type: 'image_url',
-      image_url: { url: imageUrl, detail: 'low' },
-    });
-  }
+	for (const page of note.pages) {
+		const imageUrl = await scalePngBufferToDataUrl(page.data, llmMaxWidth);
+		content.push({
+			type: 'image_url',
+			image_url: { url: imageUrl, detail },
+		});
+	}
 
   return content;
 }

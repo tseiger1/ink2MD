@@ -21,6 +21,7 @@ Open **Settings → Community plugins → Ink2MD** and adjust:
 - Output folder: vault-relative folder where PNG files and Markdown live.
 - Formats: toggle image, PDF, and e-ink discovery modules.
 - Conversion: pick separate PNG width caps for files stored in the vault and for the LLM payloads (set a slider to 0 to keep originals) plus a dedicated DPI value for PDF rasterization.
+- Replacement: enable “Replace existing notes” to overwrite previous imports instead of creating timestamped folders, and reset the processed-file cache when you want to force a re-import.
 - LLM provider:
   - **OpenAI**: add your API key, preferred vision-capable model, and prompt template.
   - **Local**: specify the endpoint URL (must speak the OpenAI Chat Completions protocol), optional API key, model name, and prompt.
@@ -37,3 +38,4 @@ Open **Settings → Community plugins → Ink2MD** and adjust:
 - The e-ink module is a stub; files are detected but skipped until a proper decoder lands.
 - OpenAI calls require an active internet connection. Local providers must accept OpenAI-compatible payloads with `image_url` entries that contain `data:` URLs.
 - The plugin targets desktop Obsidian because it accesses the local file system.
+- Already-processed files are skipped automatically by comparing file hashes and timestamps, so only new or modified exports are converted.

@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+ import OpenAI from 'openai';
 import type { ChatCompletionContentPart } from 'openai/resources/chat/completions';
 import { ConvertedNote, OpenAIProviderSettings } from '../types';
 import { scalePngBufferToDataUrl } from '../utils/pngScaler';
@@ -19,7 +19,12 @@ export class OpenAIVisionProvider {
   }
 
 	async generateMarkdown(note: ConvertedNote, llmMaxWidth: number, signal?: AbortSignal): Promise<string> {
-		const messages = await buildVisionMessage(note, this.config.promptTemplate, llmMaxWidth);
+		const messages = await buildVisionMessage(
+			note,
+			this.config.promptTemplate,
+			llmMaxWidth,
+			this.config.imageDetail,
+		);
 		const response = await this.client.chat.completions.create(
 			{
 				model: this.config.model,
@@ -41,24 +46,25 @@ export class OpenAIVisionProvider {
 }
 
 async function buildVisionMessage(
-  note: ConvertedNote,
-  promptTemplate: string,
-  llmMaxWidth: number,
+	note: ConvertedNote,
+	promptTemplate: string,
+	llmMaxWidth: number,
+	detail: 'low' | 'high',
 ): Promise<ChatCompletionContentPart[]> {
-  const parts: ChatCompletionContentPart[] = [
-    { type: 'text', text: `${promptTemplate}\nTitle: ${note.source.basename}` },
-  ];
+	const parts: ChatCompletionContentPart[] = [
+		{ type: 'text', text: `${promptTemplate}\nTitle: ${note.source.basename}` },
+	];
 
-  for (const page of note.pages) {
-    const imageUrl = await scalePngBufferToDataUrl(page.data, llmMaxWidth);
-    parts.push({
-      type: 'image_url',
-      image_url: {
-        url: imageUrl,
-        detail: 'low',
-      },
-    });
-  }
+	for (const page of note.pages) {
+		const imageUrl = await scalePngBufferToDataUrl(page.data, llmMaxWidth);
+		parts.push({
+			type: 'image_url',
+			image_url: {
+				url: imageUrl,
+				detail,
+			},
+		});
+	}
 
   return parts;
 }
