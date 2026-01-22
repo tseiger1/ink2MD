@@ -5,6 +5,6 @@
   "minAppVersion": "1.6.0",
   "description": "Import handwritten notebook files, convert them to PNG pages, and summarize with a vision LLM.",
   "author": "Thomas Schweiger",
-  "authorUrl": "https://github.com/thomasschweiger",
+  "authorUrl": "https://github.com/tseiger1",
   "isDesktopOnly": true
 }

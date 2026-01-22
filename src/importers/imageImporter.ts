@@ -1,5 +1,5 @@
 import path from 'path';
-import { collectFilesRecursive } from './fileCollector';
+import { collectFilesRecursive, getRelativeFolder } from './fileCollector';
 import { NoteSource } from '../types';
 import { createStableId, slugifyFilePath } from '../utils/naming';
 
@@ -17,6 +17,8 @@ export async function collectImageSources(directories: string[]): Promise<NoteSo
         format: 'image',
         filePath,
         basename,
+        inputRoot: dir,
+        relativeFolder: getRelativeFolder(dir, filePath),
       });
     }
   }

@@ -1,4 +1,4 @@
-import { App, Modal, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { AbstractInputSuggest, App, Modal, Notice, PluginSettingTab, Setting, SliderComponent } from 'obsidian';
 import Ink2MDPlugin from './main';
 import { Ink2MDSettings, LLMProvider } from './types';
 
@@ -57,10 +57,35 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
     containerEl.createEl('h2', { text: 'Ink2MD' });
 
-    this.renderDirectories(containerEl);
-    this.renderFormatToggles(containerEl);
-    this.renderConversion(containerEl);
-    this.renderLLMSettings(containerEl);
+    this.renderSection(containerEl, 'Sources & destinations', (sectionEl) => {
+      this.renderDirectories(sectionEl);
+    }, { isFirst: true });
+
+    this.renderSection(containerEl, 'Formats & detection', (sectionEl) => {
+      this.renderFormatToggles(sectionEl);
+    });
+
+    this.renderSection(containerEl, 'Conversion & cache', (sectionEl) => {
+      this.renderConversion(sectionEl);
+    });
+
+    this.renderSection(containerEl, 'LLM provider & prompts', (sectionEl) => {
+      this.renderLLMSettings(sectionEl);
+    });
+  }
+
+  private renderSection(
+    containerEl: HTMLElement,
+    title: string,
+    renderContent: (sectionEl: HTMLElement) => void,
+    options?: { isFirst?: boolean },
+  ) {
+    const sectionEl = containerEl.createDiv({ cls: 'ink2md-settings-section' });
+    if (options?.isFirst) {
+      sectionEl.addClass('is-first');
+    }
+    sectionEl.createEl('h3', { text: title });
+    renderContent(sectionEl);
   }
 
   private renderDirectories(containerEl: HTMLElement) {
@@ -83,16 +108,24 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Output folder')
-      .setDesc('Folder that will be created inside the vault to store PNGs and Markdown files.')
-      .addText((text) =>
-        text
+      .setDesc('Folder inside the vault where PNGs and Markdown files are stored.')
+      .addSearch((search) => {
+        const current = this.plugin.settings.outputFolder;
+        const displayValue = current === '/' ? '/' : current;
+        search
           .setPlaceholder('Ink2MD')
-          .setValue(this.plugin.settings.outputFolder)
+          .setValue(displayValue)
           .onChange(async (value) => {
-            this.plugin.settings.outputFolder = value.trim() || 'Ink2MD';
+            const trimmed = value.trim();
+            let normalized = trimmed;
+            if (!trimmed) {
+              normalized = 'Ink2MD';
+            }
+            this.plugin.settings.outputFolder = normalized;
             await this.plugin.saveSettings();
-          }),
-      );
+          });
+        new FolderSuggest(this.app, search.inputEl);
+      });
   }
 
   private renderFormatToggles(containerEl: HTMLElement) {
@@ -134,47 +167,50 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   }
 
   private renderConversion(containerEl: HTMLElement) {
-    new Setting(containerEl)
-      .setName('Attachment PNG width')
-      .setDesc('Images saved to the vault will be scaled down when wider than this value. Set to 0 to keep the original size.')
-      .addSlider((slider) =>
-        slider
-          .setLimits(0, 4096, 64)
-          .setValue(this.plugin.settings.attachmentMaxWidth)
-          .setDynamicTooltip()
-          .onChange(async (value) => {
-            this.plugin.settings.attachmentMaxWidth = value;
-            await this.plugin.saveSettings();
-          }),
-      );
+    this.renderSliderSetting({
+      containerEl,
+      name: 'Attachment PNG width',
+      desc: 'Images saved to the vault will be scaled down when wider than this value. Set to 0 to keep the original size.',
+      min: 0,
+      max: 4096,
+      step: 64,
+      value: this.plugin.settings.attachmentMaxWidth,
+      formatValue: (value) => (value === 0 ? 'Original size' : `${value}px`),
+      onChange: async (value) => {
+        this.plugin.settings.attachmentMaxWidth = value;
+        await this.plugin.saveSettings();
+      },
+    });
 
-    new Setting(containerEl)
-      .setName('LLM PNG width')
-      .setDesc('Pages sent to the LLM are optionally downscaled separately to reduce bandwidth and tokens. Set to 0 to keep the original size.')
-      .addSlider((slider) =>
-        slider
-          .setLimits(0, 2048, 32)
-          .setValue(this.plugin.settings.llmMaxWidth)
-          .setDynamicTooltip()
-          .onChange(async (value) => {
-            this.plugin.settings.llmMaxWidth = value;
-            await this.plugin.saveSettings();
-          }),
-      );
+    this.renderSliderSetting({
+      containerEl,
+      name: 'LLM PNG width',
+      desc: 'Pages sent to the LLM are optionally downscaled separately to reduce bandwidth and tokens. Set to 0 to keep the original size.',
+      min: 0,
+      max: 2048,
+      step: 32,
+      value: this.plugin.settings.llmMaxWidth,
+      formatValue: (value) => (value === 0 ? 'Original size' : `${value}px`),
+      onChange: async (value) => {
+        this.plugin.settings.llmMaxWidth = value;
+        await this.plugin.saveSettings();
+      },
+    });
 
-    new Setting(containerEl)
-      .setName('PDF render DPI')
-      .setDesc('Controls the base resolution when rasterizing PDF pages. Higher values improve fidelity at the cost of larger files.')
-      .addSlider((slider) =>
-        slider
-          .setLimits(72, 600, 12)
-          .setValue(this.plugin.settings.pdfDpi)
-          .setDynamicTooltip()
-          .onChange(async (value) => {
-            this.plugin.settings.pdfDpi = value;
-            await this.plugin.saveSettings();
-          }),
-      );
+    this.renderSliderSetting({
+      containerEl,
+      name: 'PDF render DPI',
+      desc: 'Controls the base resolution when rasterizing PDF pages. Higher values improve fidelity at the cost of larger files.',
+      min: 72,
+      max: 600,
+      step: 12,
+      value: this.plugin.settings.pdfDpi,
+      formatValue: (value) => `${value} DPI`,
+      onChange: async (value) => {
+        this.plugin.settings.pdfDpi = value;
+        await this.plugin.saveSettings();
+      },
+    });
 
     new Setting(containerEl)
       .setName('Replace existing notes')
@@ -230,22 +266,24 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   }
 
   private renderOpenAISettings(containerEl: HTMLElement) {
+    containerEl.createEl('h4', { text: 'OpenAI configuration' });
     new Setting(containerEl)
       .setName('API key')
-      .setDesc('Stored locally inside the vault data. Required for OpenAI calls.')
-      .addText((text) =>
+      .setDesc('Stored using Obsidian\'s secret storage (falls back to plugin data on older app versions). Required for OpenAI calls.')
+      .addText((text) => {
         text
           .setPlaceholder('sk-...')
-          .setValue(this.plugin.settings.openAI.apiKey)
+          .setValue(this.plugin.getOpenAISecret())
           .onChange(async (value) => {
-            this.plugin.settings.openAI.apiKey = value.trim();
-            await this.plugin.saveSettings();
-          }),
-      );
+            await this.plugin.setOpenAISecret(value);
+          });
+        text.inputEl.type = 'password';
+        text.inputEl.autocomplete = 'off';
+      });
 
     new Setting(containerEl)
       .setName('Model')
-      .setDesc('Vision-capable model such as gpt-4o-mini or o4-mini-high.')
+      .setDesc('Vision-capable model such as gpt-5-mini, gpt-5.2 or similar.')
       .addText((text) =>
         text
           .setValue(this.plugin.settings.openAI.model)
@@ -273,6 +311,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   }
 
   private renderLocalSettings(containerEl: HTMLElement) {
+    containerEl.createEl('h4', { text: 'Local endpoint configuration' });
     new Setting(containerEl)
       .setName('Endpoint URL')
       .setDesc('HTTP endpoint that accepts OpenAI-compatible chat completions requests.')
@@ -328,20 +367,59 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     this.renderPromptSetting(containerEl, 'local');
   }
 
+  private renderSliderSetting(options: {
+    containerEl: HTMLElement;
+    name: string;
+    desc: string;
+    min: number;
+    max: number;
+    step: number;
+    value: number;
+    formatValue: (value: number) => string;
+    onChange: (value: number) => Promise<void>;
+  }) {
+    const setting = new Setting(options.containerEl)
+      .setName(options.name)
+      .setDesc(options.desc);
+
+    let valueEl: HTMLSpanElement | null = null;
+    const sliderComponent = new SliderComponent(setting.controlEl)
+      .setLimits(options.min, options.max, options.step)
+      .setValue(options.value)
+      .setDynamicTooltip()
+      .onChange(async (value) => {
+        valueEl?.setText(options.formatValue(value));
+        await options.onChange(value);
+      });
+
+    valueEl = setting.controlEl.createSpan({
+      cls: 'ink2md-slider-value',
+      text: options.formatValue(options.value),
+    });
+    sliderComponent.sliderEl.insertAdjacentElement('afterend', valueEl);
+  }
+
   private renderPromptSetting(containerEl: HTMLElement, provider: 'openAI' | 'local') {
     const config = this.plugin.settings[provider];
-    new Setting(containerEl)
+    const setting = new Setting(containerEl)
       .setName('Prompt template')
-      .setDesc('Instructions prepended to the LLM request. Keep it concise to reduce latency.')
-      .addTextArea((text) => {
-        text
-          .setValue(config.promptTemplate)
-          .onChange(async (value) => {
-            config.promptTemplate = value.trim();
-            await this.plugin.saveSettings();
-          });
-        text.inputEl.rows = 4;
-      });
+      .setDesc('Instructions prepended to the LLM request. Keep it concise to reduce latency.');
+    setting.settingEl.addClass('ink2md-prompt-setting');
+
+    setting.controlEl.empty();
+    setting.controlEl.addClass('ink2md-prompt-control');
+    const textArea = setting.controlEl.createEl('textarea', {
+      cls: 'ink2md-prompt-input',
+      text: config.promptTemplate,
+    });
+    textArea.rows = 10;
+    textArea.addEventListener('input', () => {
+      config.promptTemplate = textArea.value;
+    });
+    textArea.addEventListener('change', async () => {
+      config.promptTemplate = textArea.value.trim();
+      await this.plugin.saveSettings();
+    });
   }
 
   private async confirmReset(): Promise<boolean> {
@@ -357,7 +435,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           contentEl.createEl('p', {
             text: 'This clears the cache of already-imported files so the next import reprocesses everything.',
           });
-          const buttonBar = contentEl.createDiv('ink2md-modal-buttons');
+          const buttonBar = contentEl.createDiv({ cls: 'ink2md-modal-buttons' });
           const cancel = buttonBar.createEl('button', { text: 'Cancel' });
           const confirm = buttonBar.createEl('button', { text: 'Reset' });
           confirm.addClass('mod-warning');
@@ -377,5 +455,45 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       }(this.app, resolve);
       modal.open();
     });
+  }
+}
+
+class FolderSuggest extends AbstractInputSuggest<string> {
+  private folders: string[] = [];
+  private readonly inputElRef: HTMLInputElement;
+
+  constructor(app: App, inputEl: HTMLInputElement) {
+    super(app, inputEl);
+    this.inputElRef = inputEl;
+    this.refresh();
+  }
+
+  getSuggestions(inputStr: string): string[] {
+    const query = inputStr.trim().toLowerCase();
+    this.refresh();
+    return this.folders.filter((folder) => folder.toLowerCase().includes(query));
+  }
+
+  renderSuggestion(folder: string, el: HTMLElement) {
+    el.addClass('ink2md-folder-suggestion');
+    el.setText(folder || '/');
+  }
+
+  selectSuggestion(folder: string, _evt: MouseEvent | KeyboardEvent) {
+    this.inputElRef.value = folder;
+    this.inputElRef.dispatchEvent(new Event('input'));
+    this.close();
+  }
+
+  private refresh() {
+    const dedup = new Set<string>();
+    const folders = this.app.vault.getAllFolders();
+    for (const folder of folders) {
+      if (folder.path && folder.path !== '/') {
+        dedup.add(folder.path);
+      }
+    }
+    const sorted = Array.from(dedup).sort((a, b) => a.localeCompare(b));
+    this.folders = ['/', ...sorted];
   }
 }

@@ -5,6 +5,8 @@ export interface NoteSource {
   format: InputFormat;
   filePath: string;
   basename: string;
+  inputRoot: string;
+  relativeFolder: string;
 }
 
 export interface ConvertedPage {

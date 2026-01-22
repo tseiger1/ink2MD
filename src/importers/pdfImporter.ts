@@ -1,4 +1,4 @@
-import { collectFilesRecursive } from './fileCollector';
+import { collectFilesRecursive, getRelativeFolder } from './fileCollector';
 import { NoteSource } from '../types';
 import { createStableId, slugifyFilePath } from '../utils/naming';
 
@@ -15,6 +15,8 @@ export async function collectPdfSources(directories: string[]): Promise<NoteSour
         format: 'pdf',
         filePath,
         basename: slugifyFilePath(filePath),
+        inputRoot: dir,
+        relativeFolder: getRelativeFolder(dir, filePath),
       });
     }
   }

@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
 import { Notice, Plugin, normalizePath, setIcon, setTooltip } from 'obsidian';
+import type { SecretStorage } from 'obsidian';
 import { DEFAULT_SETTINGS, Ink2MDSettingTab } from './settings';
 import type { Ink2MDSettings, ConvertedNote, NoteSource, ProcessedSourceInfo } from './types';
 import { discoverNoteSources } from './importers';
@@ -7,6 +8,8 @@ import { convertSourceToPng } from './conversion';
 import { LLMService } from './llm';
 import { buildMarkdown } from './markdown/generator';
 import { hashFile } from './utils/hash';
+
+const OPENAI_SECRET_ID = 'ink2md-openai-api-key';
 
 type SourceFingerprint = Omit<ProcessedSourceInfo, 'processedAt' | 'outputFolder'>;
 interface FreshnessResult {
@@ -23,6 +26,7 @@ interface FreshnessResult {
 	private cancelRequested = false;
 	private abortController: AbortController | null = null;
 	private pendingSpinnerStop = false;
+	private openAISecret: string | null = null;
 
   async onload() {
     await this.loadSettings();
@@ -75,11 +79,18 @@ interface FreshnessResult {
 
       let llm: LLMService;
 		try {
-			llm = new LLMService(this.settings);
+			llm = new LLMService(this.getRuntimeSettingsWithSecrets());
 		} catch (error) {
 			console.error(error);
 			new Notice('Ink2MD: unable to initialize the selected LLM provider.');
 			finalStatus = 'LLM initialization failed';
+			this.setStatus(finalStatus);
+			return;
+		}
+
+		if (this.settings.llmProvider === 'openai' && !this.getOpenAISecret()) {
+			new Notice('Ink2MD: add your OpenAI API key in the plugin settings before running an import.');
+			finalStatus = 'Configuration required';
 			this.setStatus(finalStatus);
 			return;
 		}
@@ -108,7 +119,7 @@ interface FreshnessResult {
 				continue;
 			}
 
-			const folderPath = await this.ensureNoteFolder(converted.source.basename, reusePath);
+			const folderPath = await this.ensureNoteFolder(converted.source, reusePath);
 
 			if (this.cancelRequested) {
 				cancelled = true;
@@ -155,7 +166,7 @@ interface FreshnessResult {
 
 	private async persistNote(note: ConvertedNote, llmMarkdown: string, targetFolder?: string) {
 		const adapter = this.app.vault.adapter;
-		const folderPath = targetFolder ?? (await this.ensureNoteFolder(note.source.basename));
+		const folderPath = targetFolder ?? (await this.ensureNoteFolder(note.source));
 		const imageEmbeds: Array<{ path: string; width: number }> = [];
 
     for (const page of note.pages) {
@@ -364,13 +375,8 @@ interface FreshnessResult {
 		await this.app.vault.adapter.mkdir(folderPath);
 	}
 
-	private async ensureNoteFolder(baseName: string, reusePath?: string): Promise<string> {
+	private async ensureNoteFolder(source: NoteSource, reusePath?: string): Promise<string> {
 		const adapter = this.app.vault.adapter;
-		const root = normalizePath(this.settings.outputFolder || 'Ink2MD');
-		if (!(await adapter.exists(root))) {
-			await adapter.mkdir(root);
-		}
-
 		if (reusePath) {
 			const normalizedReuse = normalizePath(reusePath);
 			if (await adapter.exists(normalizedReuse)) {
@@ -381,23 +387,152 @@ interface FreshnessResult {
 			}
 		}
 
-		let candidate = normalizePath(`${root}/${baseName}`);
+		const root = this.resolveOutputRoot();
+		const relativeFolder = this.sanitizeRelativeFolder(source.relativeFolder);
+		const baseFolder = this.joinPaths(root, relativeFolder);
+		if (baseFolder) {
+			await this.ensureDirectory(baseFolder);
+		}
+
+		const buildCandidate = (suffix: string) => this.joinPaths(baseFolder, suffix);
+		let candidate = buildCandidate(source.basename);
 		let counter = 1;
-		while (await adapter.exists(candidate)) {
+		while (candidate && (await adapter.exists(candidate))) {
 			if (this.settings.replaceExisting) {
 				await this.resetFolder(candidate);
 				return candidate;
 			}
 			counter += 1;
-			candidate = normalizePath(`${root}/${baseName}-${counter}`);
+			candidate = buildCandidate(`${source.basename}-${counter}`);
 		}
 
-		await adapter.mkdir(candidate);
+		if (!candidate) {
+			candidate = normalizePath(source.basename);
+		}
+		await this.ensureDirectory(candidate);
 		return candidate;
+	}
+
+	private resolveOutputRoot(): string {
+		const configured = (this.settings.outputFolder ?? '').trim();
+		if (!configured) {
+			return normalizePath('Ink2MD');
+		}
+		if (configured === '/' || configured === '.') {
+			return '';
+		}
+		return normalizePath(configured);
+	}
+
+	private sanitizeRelativeFolder(relative?: string): string {
+		if (!relative) {
+			return '';
+		}
+		const parts = relative
+			.split(/[\\/]/)
+			.map((part) => part.trim())
+			.filter((part) => part && part !== '.' && part !== '..');
+		return parts.join('/');
+	}
+
+	private joinPaths(...segments: Array<string | undefined>): string {
+		const filtered = segments.filter((segment): segment is string => !!segment && segment.length > 0);
+		if (!filtered.length) {
+			return '';
+		}
+		return normalizePath(filtered.join('/'));
+	}
+
+	private async ensureDirectory(path: string) {
+		const trimmed = path?.trim();
+		if (!trimmed) {
+			return;
+		}
+		const adapter = this.app.vault.adapter;
+		const normalized = normalizePath(trimmed);
+		const segments = normalized.split('/').filter(Boolean);
+		if (!segments.length) {
+			return;
+		}
+		let current = '';
+		for (const segment of segments) {
+			current = current ? `${current}/${segment}` : segment;
+			if (!(await adapter.exists(current))) {
+				await adapter.mkdir(current);
+			}
+		}
+	}
+
+	private getRuntimeSettingsWithSecrets(): Ink2MDSettings {
+		if (this.settings.llmProvider !== 'openai') {
+			return this.settings;
+		}
+		return {
+			...this.settings,
+			openAI: {
+				...this.settings.openAI,
+				apiKey: this.getOpenAISecret(),
+			},
+		};
+	}
+
+	private getSecretStorage(): SecretStorage | null {
+		const storage = this.app?.secretStorage;
+		if (!storage) {
+			return null;
+		}
+		if (typeof storage.getSecret !== 'function' || typeof storage.setSecret !== 'function') {
+			return null;
+		}
+		return storage;
+	}
+
+	private supportsSecretStorage(): boolean {
+		return this.getSecretStorage() !== null;
+	}
+
+	private readOpenAISecretFromStore(): string | null {
+		const storage = this.getSecretStorage();
+		if (!storage) {
+			return this.settings.openAI.apiKey?.trim() || null;
+		}
+		try {
+			const secret = storage.getSecret(OPENAI_SECRET_ID);
+			return secret && secret.trim().length > 0 ? secret.trim() : null;
+		} catch (error) {
+			console.warn('[ink2md] Unable to read OpenAI API key from secret storage.', error);
+			return null;
+		}
+	}
+
+	getOpenAISecret(): string {
+		if (this.openAISecret && this.openAISecret.length > 0) {
+			return this.openAISecret;
+		}
+		const secret = this.readOpenAISecretFromStore();
+		this.openAISecret = secret;
+		return secret ?? '';
+	}
+
+	async setOpenAISecret(value: string) {
+		const trimmed = value.trim();
+		this.openAISecret = trimmed.length > 0 ? trimmed : null;
+		const storage = this.getSecretStorage();
+		if (storage) {
+			try {
+				storage.setSecret(OPENAI_SECRET_ID, this.openAISecret ?? '');
+			} catch (error) {
+				console.error('[ink2md] Unable to persist OpenAI API key in secret storage.', error);
+			}
+			return;
+		}
+		this.settings.openAI.apiKey = this.openAISecret ?? '';
+		await this.saveSettings();
 	}
 
 	async loadSettings() {
 		const stored = (await this.loadData()) as (Partial<Ink2MDSettings> & { maxImageWidth?: number }) | null;
+		const legacyOpenAIKey = stored?.openAI?.apiKey?.trim();
 		const attachmentMaxWidth = stored?.attachmentMaxWidth ?? stored?.maxImageWidth ?? DEFAULT_SETTINGS.attachmentMaxWidth;
 		const llmMaxWidth = stored?.llmMaxWidth ?? attachmentMaxWidth ?? DEFAULT_SETTINGS.llmMaxWidth;
 		const pdfDpi = stored?.pdfDpi ?? DEFAULT_SETTINGS.pdfDpi;
@@ -423,9 +558,35 @@ interface FreshnessResult {
 		  },
 		  processedSources,
 		} as Ink2MDSettings;
+
+		const secretStorage = this.getSecretStorage();
+		if (secretStorage) {
+			let migratedLegacyKey = false;
+			if (legacyOpenAIKey) {
+				try {
+					secretStorage.setSecret(OPENAI_SECRET_ID, legacyOpenAIKey);
+					migratedLegacyKey = true;
+				} catch (error) {
+					console.error('[ink2md] Unable to migrate stored OpenAI API key into secret storage.', error);
+				}
+			}
+			this.openAISecret = this.readOpenAISecretFromStore();
+			this.settings.openAI.apiKey = '';
+			if (migratedLegacyKey) {
+				await this.saveSettings();
+			}
+		} else {
+			this.openAISecret = legacyOpenAIKey && legacyOpenAIKey.length > 0 ? legacyOpenAIKey : null;
+			this.settings.openAI.apiKey = this.openAISecret ?? '';
+		}
 	}
 
   async saveSettings() {
+		if (this.supportsSecretStorage()) {
+			this.settings.openAI.apiKey = '';
+		} else {
+			this.settings.openAI.apiKey = this.openAISecret ?? '';
+		}
     await this.saveData(this.settings);
   }
 }

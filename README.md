@@ -5,7 +5,6 @@ Ink2MD is an Obsidian plugin that brings handwritten notebooks into your vault. 
 ## Features
 - Watch multiple input directories (with recursive scanning) for handwritten notes.
 - Convert JPG/PNG/WebP images, PDFs, and Supernote `.note` notebooks into PNG pages with an optional width cap.
-- Stub module for e-ink formats: detected files are reported but skipped until a converter is provided.
 - Generate Markdown summaries through OpenAI or any OpenAI-compatible local endpoint.
 - Store all generated pages and Markdown files inside a dedicated folder in your vault.
 

@@ -31,3 +31,12 @@ export async function collectFilesRecursive(rootDir: string, extensions: string[
   await walk(rootDir);
   return matches;
 }
+
+export function getRelativeFolder(rootDir: string, filePath: string): string {
+  const parentDir = path.dirname(filePath);
+  const relative = path.relative(rootDir, parentDir);
+  if (!relative || relative === '.' || relative.startsWith('..')) {
+    return '';
+  }
+  return relative.split(path.sep).filter(Boolean).join('/');
+}

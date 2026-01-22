@@ -1,4 +1,4 @@
-import { collectFilesRecursive } from './fileCollector';
+import { collectFilesRecursive, getRelativeFolder } from './fileCollector';
 import { NoteSource } from '../types';
 import { createStableId, slugifyFilePath } from '../utils/naming';
 
@@ -14,6 +14,8 @@ export async function collectSupernoteSources(directories: string[]): Promise<No
         format: 'supernote',
         filePath,
         basename: slugifyFilePath(filePath),
+        inputRoot: dir,
+        relativeFolder: getRelativeFolder(dir, filePath),
       });
     }
   }
