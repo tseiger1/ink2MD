@@ -1,3 +1,4 @@
+import path from 'path';
 import { collectFilesRecursive, getRelativeFolder } from './fileCollector';
 import { NoteSource, SourceConfig } from '../types';
 import { createStableId, slugifyFilePath } from '../utils/naming';
@@ -23,4 +24,8 @@ export async function collectPdfSources(source: SourceConfig): Promise<NoteSourc
 	}
 
 	return sources;
+}
+
+export function isPdfFile(filePath: string): boolean {
+	return PDF_EXTENSIONS.includes(path.extname(filePath).toLowerCase());
 }

@@ -10,8 +10,9 @@ export function slugifyFilePath(filePath: string): string {
   return normalized || 'note';
 }
 
-export function createStableId(filePath: string): string {
+export function createStableId(filePath: string, scope = ''): string {
   const slug = slugifyFilePath(filePath);
-  const hash = createHash('sha1').update(filePath).digest('hex').slice(0, 8);
+  const hashInput = scope ? `${scope}:${filePath}` : filePath;
+  const hash = createHash('sha1').update(hashInput).digest('hex').slice(0, 8);
   return `${slug}-${hash}`;
 }

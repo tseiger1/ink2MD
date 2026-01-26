@@ -26,6 +26,8 @@ const DEFAULT_PRESET_ID = 'preset-default';
 const DEFAULT_SOURCE_ID = 'source-default';
 const DEFAULT_OUTPUT_ROOT = 'Ink2MD';
 const DEFAULT_SOURCE_LABEL = 'Source';
+const DEFAULT_DROPZONE_ID = 'source-dropzone';
+const DEFAULT_DROPZONE_LABEL = 'Dropzone';
 
 const DEFAULT_LLM_PRESET: LLMPreset = {
   id: DEFAULT_PRESET_ID,
@@ -66,8 +68,26 @@ const DEFAULT_SOURCE: SourceConfig = {
   llmPresetId: DEFAULT_PRESET_ID,
 };
 
+const DEFAULT_DROPZONE_SOURCE: SourceConfig = {
+  id: DEFAULT_DROPZONE_ID,
+  label: DEFAULT_DROPZONE_LABEL,
+  type: 'dropzone',
+  directories: [],
+  recursive: false,
+  includeImages: true,
+  includePdfs: true,
+  includeSupernote: true,
+  attachmentMaxWidth: 0,
+  pdfDpi: 300,
+  replaceExisting: false,
+  outputFolder: `${DEFAULT_OUTPUT_ROOT}/${DEFAULT_DROPZONE_LABEL}`,
+  openGeneratedNotes: false,
+  openInNewLeaf: true,
+  llmPresetId: DEFAULT_PRESET_ID,
+};
+
 export const DEFAULT_SETTINGS: Ink2MDSettings = {
-  sources: [DEFAULT_SOURCE],
+  sources: [DEFAULT_SOURCE, DEFAULT_DROPZONE_SOURCE],
   llmPresets: [DEFAULT_LLM_PRESET],
   processedSources: {},
   secretBindings: {},
@@ -105,7 +125,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     const { sectionEl, actions } = this.createSection(
       containerEl,
       'Sources',
-      'Define input sources to watch.',
+      'Define folder sources or dropzone targets for manual imports.',
     );
 
     this.createTextButton(actions, 'Clear all caches', async () => {
@@ -235,33 +255,54 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           }),
       );
 
-    const directoriesSetting = new Setting(container)
-      .setName('Directories')
-      .setDesc('Absolute paths, one per line. Sub-folders are included when recursive is enabled.');
-    directoriesSetting.controlEl.empty();
-    const directoriesInput = directoriesSetting.controlEl.createEl('textarea', {
-      cls: 'ink2md-source-directories',
-      text: draft.directories.join('\n'),
-    });
-    directoriesInput.rows = 4;
-    directoriesInput.addEventListener('change', () => {
-      draft.directories = directoriesInput.value
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
-      summaryEl.setText(this.describeSource(draft));
-    });
-
     new Setting(container)
-      .setName('Recursive scan')
-      .setDesc('Include files inside sub-folders automatically.')
-      .addToggle((toggle) =>
-        toggle
-          .setValue(draft.recursive)
+      .setName('Source type')
+      .setDesc('Watch folders automatically or use the right sidebar dropzone view.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('filesystem', 'Watch folders')
+          .addOption('dropzone', 'Dropzone view')
+          .setValue(draft.type ?? 'filesystem')
           .onChange((value) => {
-            draft.recursive = value;
+            draft.type = value as SourceConfig['type'];
+            summaryEl.setText(this.describeSource(draft));
+            this.display();
           }),
       );
+
+    if (draft.type === 'filesystem') {
+      const directoriesSetting = new Setting(container)
+        .setName('Directories')
+        .setDesc('Absolute paths, one per line. Sub-folders are included when recursive is enabled.');
+      directoriesSetting.controlEl.empty();
+      const directoriesInput = directoriesSetting.controlEl.createEl('textarea', {
+        cls: 'ink2md-source-directories',
+        text: draft.directories.join('\n'),
+      });
+      directoriesInput.rows = 4;
+      directoriesInput.addEventListener('change', () => {
+        draft.directories = directoriesInput.value
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+        summaryEl.setText(this.describeSource(draft));
+      });
+
+      new Setting(container)
+        .setName('Recursive scan')
+        .setDesc('Include files inside sub-folders automatically.')
+        .addToggle((toggle) =>
+          toggle
+            .setValue(draft.recursive)
+            .onChange((value) => {
+              draft.recursive = value;
+            }),
+        );
+    } else {
+      new Setting(container)
+        .setName('Dropzone input')
+        .setDesc('Drag files into the Ink2MD right sidebar view or use its browse button.');
+    }
 
     new Setting(container)
       .setName('Image imports (.png/.jpg/.webp)')
@@ -579,17 +620,24 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
   private describeSource(source: SourceConfig): string {
     const parts = [];
-    const dirCount = source.directories.length;
-    if (dirCount === 0) {
-      parts.push('No folders');
-    } else if (dirCount === 1) {
-      parts.push('1 folder');
+    if (source.type === 'dropzone') {
+      parts.push('Dropzone view');
     } else {
-      parts.push(`${dirCount} folders`);
+      const dirCount = source.directories.length;
+      if (dirCount === 0) {
+        parts.push('No folders');
+      } else if (dirCount === 1) {
+        parts.push('1 folder');
+      } else {
+        parts.push(`${dirCount} folders`);
+      }
     }
     const preset = this.plugin.settings.llmPresets.find((entry) => entry.id === source.llmPresetId);
     if (preset) {
       parts.push(`Preset: ${preset.label}`);
+    }
+    if (source.outputFolder) {
+      parts.push(`Output: ${source.outputFolder}`);
     }
     return parts.join(' • ');
   }

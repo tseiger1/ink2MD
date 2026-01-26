@@ -1,4 +1,6 @@
 import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 import { Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from 'obsidian';
 import type { SecretStorage } from 'obsidian';
 import { DEFAULT_SETTINGS, Ink2MDSettingTab } from './settings';
@@ -10,12 +12,18 @@ import type {
 	ImageEmbed,
 	SourceConfig,
 	LLMPreset,
+	InputFormat,
 } from './types';
 import { discoverNoteSourcesForConfig } from './importers';
 import { convertSourceToPng } from './conversion';
 import { LLMService } from './llm';
 import { buildMarkdown, buildFrontMatter, buildPagesSection } from './markdown/generator';
 import { hashFile } from './utils/hash';
+import { createStableId, slugifyFilePath } from './utils/naming';
+import { isImageFile } from './importers/imageImporter';
+import { isPdfFile } from './importers/pdfImporter';
+import { isSupernoteFile } from './importers/supernoteImporter';
+import { Ink2MDDropView, VIEW_TYPE_INK2MD_DROP } from './ui/dropView';
 
 const OPENAI_SECRET_ID = 'ink2md-openai-api-key';
 const OPENAI_SECRET_PREFIX = `${OPENAI_SECRET_ID}-`;
@@ -38,6 +46,11 @@ interface ImportJob {
 	preset: LLMPreset;
 }
 
+interface ImportRunOptions {
+	preparingNotice?: string;
+	preparingStatus?: string;
+}
+
 	export default class Ink2MDPlugin extends Plugin {
 	settings: Ink2MDSettings;
 	private statusBarEl: HTMLElement | null = null;
@@ -48,9 +61,16 @@ interface ImportJob {
 	private pendingSpinnerStop = false;
 	private openAISecrets: Record<string, string | null> = {};
 	private notifiedMissingSecretStorage = false;
+	private stagedFiles = new Set<string>();
+	private dropzoneCacheDir: string | null = null;
 
   async onload() {
     await this.loadSettings();
+
+    this.registerView(VIEW_TYPE_INK2MD_DROP, (leaf) => new Ink2MDDropView(leaf, this));
+    this.app.workspace.onLayoutReady(() => {
+      this.activateDropzoneView(false).catch((error) => console.error(error));
+    });
 
     this.addRibbonIcon('pen-tool', 'Import handwritten notes', () => {
       this.triggerImport().catch((error) => console.error(error));
@@ -62,34 +82,173 @@ interface ImportJob {
       callback: () => this.triggerImport(),
     });
 
+    this.addCommand({
+      id: 'ink2md-open-dropzone',
+      name: 'Open Ink2MD dropzone',
+      callback: () => this.activateDropzoneView(true),
+    });
+
     this.setupStatusBar();
 
     this.addSettingTab(new Ink2MDSettingTab(this.app, this));
   }
 
-  async triggerImport() {
-    if (this.isImporting) {
-      new Notice('Ink2MD: an import is already running. Click the spinner to cancel.');
-      return;
+  async onunload() {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_INK2MD_DROP);
+    if (leaves.length) {
+      const fallback = this.app.workspace.getMostRecentLeaf(this.app.workspace.rootSplit) ?? this.app.workspace.getLeaf(false);
+      if (fallback) {
+        this.app.workspace.setActiveLeaf(fallback, { focus: false });
+      }
+      for (const leaf of leaves) {
+        try {
+          leaf.detach();
+        } catch (error) {
+          console.warn('[ink2md] Unable to detach dropzone leaf on unload.', error);
+        }
+      }
     }
+    await this.cleanupStagedFiles(Array.from(this.stagedFiles));
+  }
 
+	async triggerImport() {
+		await this.withImportLock(async () => {
+		const jobs = await this.collectImportJobs();
+		if (!jobs.length) {
+			new Notice('Ink2MD: no sources are ready to import. Configure at least one source with directories and an LLM preset.');
+			this.setStatus('Configuration required');
+			return 'Configuration required';
+		}
+		return this.processImportJobs(jobs, {
+			preparingNotice: 'Ink2MD: scanning input directories...',
+			preparingStatus: 'Scanning for handwritten notes...',
+		});
+		});
+	}
+
+	async importDroppedFiles(sourceId: string, filePaths: string[]) {
+		const normalizedPaths = Array.from(
+			new Set(
+				filePaths
+					.map((filePath) => (typeof filePath === 'string' ? filePath.trim() : ''))
+					.filter((entry) => entry.length > 0),
+				),
+		);
+		if (!normalizedPaths.length) {
+			new Notice('Ink2MD: no files selected for import.');
+			return;
+		}
+		const sourceConfig = this.settings.sources.find((source) => source.id === sourceId && source.type === 'dropzone');
+		if (!sourceConfig) {
+			new Notice('Ink2MD: configure a dropzone source in settings before importing.');
+			return;
+		}
+		const preset = this.resolvePresetForSource(sourceConfig);
+		if (!preset) {
+			return;
+		}
+		const notes: NoteSource[] = [];
+		for (const filePath of normalizedPaths) {
+			const format = this.detectFormatForPath(filePath);
+			if (!format) {
+				console.warn(`[ink2md] Unsupported file dropped: ${filePath}`);
+				continue;
+			}
+			if (!this.isFormatEnabled(format, sourceConfig)) {
+				console.warn(`[ink2md] ${format} imports disabled for ${sourceConfig.label}. Skipping ${filePath}`);
+				continue;
+			}
+			notes.push(this.createManualNoteSource(filePath, format, sourceConfig));
+		}
+		if (!notes.length) {
+			new Notice('Ink2MD: none of the selected files match this source configuration.');
+			return;
+		}
+		const jobs = notes.map((note) => ({ note, sourceConfig, preset }));
+		await this.withImportLock(() =>
+			this.processImportJobs(jobs, {
+				preparingNotice: 'Ink2MD: preparing dropped files...',
+				preparingStatus: 'Preparing dropped files...',
+			}),
+		);
+	}
+
+	private async withImportLock(task: () => Promise<string>): Promise<void> {
+		if (this.isImporting) {
+			new Notice('Ink2MD: an import is already running. Click the spinner to cancel.');
+			return;
+		}
 		this.isImporting = true;
 		this.cancelRequested = false;
 		this.abortController = new AbortController();
 		this.setSpinner(true);
+		let finalStatus = 'Idle';
+		try {
+			finalStatus = await task();
+		} catch (error) {
+			console.error('[ink2md] Import run failed', error);
+			new Notice('Ink2MD: import failed. Check developer console for details.');
+			finalStatus = 'Idle';
+		} finally {
+			this.finishImport(finalStatus);
+		}
+	}
 
-    let finalStatus = 'Idle';
-    try {
-		const jobs = await this.collectImportJobs();
-		if (!jobs.length) {
-			new Notice('Ink2MD: no sources are ready to import. Configure at least one source with directories and an LLM preset.');
-			finalStatus = 'Configuration required';
-			this.setStatus(finalStatus);
-			return;
+	private async collectImportJobs(): Promise<ImportJob[]> {
+		const jobs: ImportJob[] = [];
+		const sources = this.settings.sources ?? [];
+		if (!sources.length) {
+			return jobs;
 		}
 
-		new Notice('Ink2MD: scanning input directories...');
-		this.setStatus('Scanning for handwritten notes...');
+		for (const sourceConfig of sources) {
+			if (sourceConfig.type !== 'filesystem') {
+				continue;
+			}
+			if (!sourceConfig.directories.length) {
+				new Notice(`Ink2MD: source "${sourceConfig.label}" has no directories configured.`);
+				continue;
+			}
+			const preset = this.resolvePresetForSource(sourceConfig);
+			if (!preset) {
+				continue;
+			}
+			const notes = await discoverNoteSourcesForConfig(sourceConfig);
+			for (const note of notes) {
+				jobs.push({ note, sourceConfig, preset });
+			}
+		}
+
+		return jobs;
+	}
+
+	private resolvePresetForSource(sourceConfig: SourceConfig): LLMPreset | null {
+		if (!sourceConfig.llmPresetId) {
+			new Notice(`Ink2MD: source "${sourceConfig.label}" is missing an LLM preset.`);
+			return null;
+		}
+		const preset = this.getRuntimePreset(sourceConfig.llmPresetId);
+		if (!preset) {
+			new Notice(`Ink2MD: preset linked to "${sourceConfig.label}" was not found.`);
+			return null;
+		}
+		if (preset.provider === 'openai' && !preset.openAI.apiKey) {
+			new Notice(`Ink2MD: preset "${preset.label}" requires an OpenAI API key.`);
+			return null;
+		}
+		return preset;
+	}
+
+	private async processImportJobs(jobs: ImportJob[], options?: ImportRunOptions): Promise<string> {
+		if (!jobs.length) {
+			return 'Idle';
+		}
+		if (options?.preparingNotice) {
+			new Notice(options.preparingNotice);
+		}
+		if (options?.preparingStatus) {
+			this.setStatus(options.preparingStatus);
+		}
 		const llmCache = new Map<string, LLMService>();
 		let processed = 0;
 		let cancelled = false;
@@ -182,55 +341,55 @@ interface ImportJob {
 		}
 
 		if (cancelled) {
-			finalStatus = 'Cancelled';
-			this.setStatus(finalStatus);
+			this.setStatus('Cancelled');
 			new Notice('Ink2MD: import cancelled.');
-		} else {
-			new Notice(`Ink2MD: imported ${processed} note${processed === 1 ? '' : 's'}.`);
-			finalStatus = 'Idle';
-			this.setStatus(finalStatus);
+			return 'Cancelled';
 		}
-    } finally {
-      this.finishImport(finalStatus);
-    }
-  }
+		new Notice(`Ink2MD: imported ${processed} note${processed === 1 ? '' : 's'}.`);
+		this.setStatus('Idle');
+		return 'Idle';
+	}
 
-	private async collectImportJobs(): Promise<ImportJob[]> {
-		const jobs: ImportJob[] = [];
-		const sources = this.settings.sources ?? [];
-		if (!sources.length) {
-			return jobs;
+	private detectFormatForPath(filePath: string): InputFormat | null {
+		if (isPdfFile(filePath)) {
+			return 'pdf';
 		}
-
-		for (const sourceConfig of sources) {
-			if (sourceConfig.type !== 'filesystem') {
-				console.warn(`[ink2md] Unsupported source type ${sourceConfig.type} for ${sourceConfig.label}`);
-				continue;
-			}
-			if (!sourceConfig.directories.length) {
-				new Notice(`Ink2MD: source "${sourceConfig.label}" has no directories configured.`);
-				continue;
-			}
-			if (!sourceConfig.llmPresetId) {
-				new Notice(`Ink2MD: source "${sourceConfig.label}" is missing an LLM preset.`);
-				continue;
-			}
-			const preset = this.getRuntimePreset(sourceConfig.llmPresetId);
-			if (!preset) {
-				new Notice(`Ink2MD: preset linked to "${sourceConfig.label}" was not found.`);
-				continue;
-			}
-			if (preset.provider === 'openai' && !preset.openAI.apiKey) {
-				new Notice(`Ink2MD: preset "${preset.label}" requires an OpenAI API key.`);
-				continue;
-			}
-			const notes = await discoverNoteSourcesForConfig(sourceConfig);
-			for (const note of notes) {
-				jobs.push({ note, sourceConfig, preset });
-			}
+		if (isSupernoteFile(filePath)) {
+			return 'supernote';
 		}
+		if (isImageFile(filePath)) {
+			return 'image';
+		}
+		const ext = path.extname(filePath).toLowerCase();
+		if (ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.webp') {
+			return 'image';
+		}
+		return null;
+	}
 
-		return jobs;
+	private isFormatEnabled(format: InputFormat, sourceConfig: SourceConfig): boolean {
+		if (format === 'image') {
+			return sourceConfig.includeImages;
+		}
+		if (format === 'pdf') {
+			return sourceConfig.includePdfs;
+		}
+		if (format === 'supernote') {
+			return sourceConfig.includeSupernote;
+		}
+		return false;
+	}
+
+	private createManualNoteSource(filePath: string, format: InputFormat, sourceConfig: SourceConfig): NoteSource {
+		return {
+			id: createStableId(filePath, sourceConfig.id),
+			sourceId: sourceConfig.id,
+			format,
+			filePath,
+			basename: slugifyFilePath(filePath),
+			inputRoot: path.dirname(filePath),
+			relativeFolder: '',
+		};
 	}
 
 	private getOrCreateLLMService(preset: LLMPreset, cache: Map<string, LLMService>): LLMService {
@@ -366,6 +525,7 @@ interface ImportJob {
 		this.statusBarEl = this.addStatusBarItem();
 		this.statusBarEl.addClass('ink2md-status');
 		this.statusIconEl = this.statusBarEl.createSpan({ cls: 'ink2md-status-icon' });
+		this.statusBarEl.createSpan({ cls: 'ink2md-status-label', text: 'Ink2MD' });
 		this.statusIconEl.addEventListener('animationiteration', () => {
 			if (this.pendingSpinnerStop) {
 				this.statusIconEl?.classList.remove('is-spinning');
@@ -387,6 +547,21 @@ interface ImportJob {
 		});
 		this.setSpinner(false);
 		this.setStatus('Idle');
+	}
+
+	private async activateDropzoneView(focus = false): Promise<void> {
+		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_INK2MD_DROP);
+		if (existing.length) {
+			if (focus) {
+				this.app.workspace.revealLeaf(existing[0]!);
+			}
+			return;
+		}
+		const rightLeaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf(true);
+		await rightLeaf.setViewState({ type: VIEW_TYPE_INK2MD_DROP, active: focus });
+		if (focus) {
+			this.app.workspace.revealLeaf(rightLeaf);
+		}
 	}
 
 	private setSpinner(active: boolean) {
@@ -659,6 +834,47 @@ interface ImportJob {
 		return this.getSecretBindings()[presetId] ?? null;
 	}
 
+	getDropzoneSources(): SourceConfig[] {
+		return (this.settings.sources ?? []).filter((source) => source.type === 'dropzone');
+	}
+
+	async stageDroppedFile(fileName: string, data: ArrayBuffer): Promise<string> {
+		const dir = await this.ensureDropzoneCacheDir();
+		const safeName = this.sanitizeTempFileName(fileName);
+		const uniqueName = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
+		const stagedPath = path.join(dir, uniqueName);
+		await fs.writeFile(stagedPath, Buffer.from(data));
+		this.stagedFiles.add(stagedPath);
+		return stagedPath;
+	}
+
+	async cleanupStagedFiles(paths: string[]) {
+		for (const filePath of paths) {
+			try {
+				await fs.unlink(filePath);
+			} catch (error) {
+				console.warn(`[ink2md] Unable to delete staged file ${filePath}`, error);
+			}
+			this.stagedFiles.delete(filePath);
+		}
+	}
+
+	private async ensureDropzoneCacheDir(): Promise<string> {
+		if (this.dropzoneCacheDir) {
+			return this.dropzoneCacheDir;
+		}
+		const dir = path.join(os.tmpdir(), 'ink2md-dropzone');
+		await fs.mkdir(dir, { recursive: true });
+		this.dropzoneCacheDir = dir;
+		return dir;
+	}
+
+	private sanitizeTempFileName(name: string): string {
+		const trimmed = name?.trim() || 'file';
+		const sanitized = trimmed.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+		return sanitized || 'file';
+	}
+
 	private generateSecretSuffix(): string {
 		const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
 		let suffix = '';
@@ -854,11 +1070,25 @@ interface ImportJob {
 			preset.openAI.apiKey = '';
 		}
 		await this.saveData(this.settings);
+		this.refreshDropzoneViews();
+	}
+
+	private refreshDropzoneViews() {
+		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_INK2MD_DROP);
+		for (const leaf of leaves) {
+			const view = leaf.view;
+			if (view instanceof Ink2MDDropView) {
+				view.refresh();
+			}
+		}
 	}
 
 	private normalizeSettings(raw: Partial<Ink2MDSettings>): { settings: Ink2MDSettings; openAIKeys: Record<string, string> } {
 		const defaultPresetTemplate = DEFAULT_SETTINGS.llmPresets[0]!;
-		const defaultSourceTemplate = DEFAULT_SETTINGS.sources[0]!;
+		const defaultSourceTemplate =
+			DEFAULT_SETTINGS.sources.find((source) => source.type === 'filesystem') ?? DEFAULT_SETTINGS.sources[0]!;
+		const defaultDropzoneTemplate =
+			DEFAULT_SETTINGS.sources.find((source) => source.type === 'dropzone') ?? defaultSourceTemplate;
 		const rawPresets = Array.isArray(raw.llmPresets) && raw.llmPresets.length ? raw.llmPresets : DEFAULT_SETTINGS.llmPresets;
 		const presets: LLMPreset[] = rawPresets.map((preset, index) => this.normalizePreset(preset, defaultPresetTemplate, index));
 		if (!presets.length) {
@@ -872,6 +1102,21 @@ interface ImportJob {
 		);
 		if (!sources.length) {
 			sources.push(this.normalizeSource(undefined, defaultSourceTemplate, presetIds, primaryPresetId, 0));
+		}
+		const dropzonePresetId = presetIds.has(defaultPresetTemplate.id) ? defaultPresetTemplate.id : primaryPresetId;
+		if (!sources.some((source) => source.type === 'dropzone')) {
+			const dropzoneBase: SourceConfig = {
+				...defaultDropzoneTemplate,
+				id: this.generateId('source'),
+				label: defaultDropzoneTemplate.label ?? 'Dropzone',
+				type: 'dropzone',
+				directories: [],
+				recursive: false,
+				llmPresetId: dropzonePresetId,
+			};
+			sources.push(
+				this.normalizeSource(dropzoneBase, defaultDropzoneTemplate, presetIds, primaryPresetId, sources.length),
+			);
 		}
 		const processedSources: Record<string, ProcessedSourceInfo> = {};
 		const rawProcessed = raw.processedSources ?? {};

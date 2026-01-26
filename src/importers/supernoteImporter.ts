@@ -1,3 +1,4 @@
+import path from 'path';
 import { collectFilesRecursive, getRelativeFolder } from './fileCollector';
 import { NoteSource, SourceConfig } from '../types';
 import { createStableId, slugifyFilePath } from '../utils/naming';
@@ -21,4 +22,8 @@ export async function collectSupernoteSources(source: SourceConfig): Promise<Not
 		}
 	}
 	return sources;
+}
+
+export function isSupernoteFile(filePath: string): boolean {
+	return SUPERNOTE_EXTENSION.includes(path.extname(filePath).toLowerCase());
 }

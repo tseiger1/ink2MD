@@ -1,6 +1,6 @@
 export type InputFormat = 'image' | 'pdf' | 'supernote';
 
-export type SourceType = 'filesystem';
+export type SourceType = 'filesystem' | 'dropzone';
 
 export interface NoteSource {
 	id: string;

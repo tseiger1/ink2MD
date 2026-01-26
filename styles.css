@@ -2,8 +2,9 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 1.5em;
+  justify-content: flex-start;
+  gap: 0.35em;
+  padding: 0 0.4em;
   height: 1.5em;
 }
 
@@ -14,6 +15,12 @@
   justify-content: center;
   cursor: pointer;
   color: var(--text-accent);
+}
+
+.ink2md-status-label {
+  font-size: 0.9em;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .ink2md-settings-section {
@@ -294,4 +301,111 @@
   margin: 0.25rem 0 0;
   color: var(--text-muted);
   padding-left: 0;
+}
+
+.ink2md-drop-view-container {
+  padding: 1rem;
+}
+
+.ink2md-drop-empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.ink2md-drop-empty h3 {
+  margin: 0 0 0.5rem;
+}
+
+.ink2md-drop-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.ink2md-drop-header h3 {
+  margin: 0;
+}
+
+.ink2md-drop-header p {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+}
+
+.ink2md-drop-header {
+  margin-bottom: 0.75rem;
+}
+
+.ink2md-drop-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ink2md-drop-select {
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  padding: 0.4rem 0.6rem;
+  background: var(--background-secondary);
+}
+
+.ink2md-dropzone {
+  border: 2px dashed var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 2rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  background: var(--background-secondary);
+  transition: border-color 0.2s ease, background 0.2s ease;
+  }
+
+.ink2md-dropzone.is-dragging {
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+
+.ink2md-dropzone-icon-wrapper {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.ink2md-dropzone-doc-icon {
+  color: var(--text-muted);
+}
+
+.ink2md-dropzone-doc-icon svg {
+  width: 140px;
+  height: 140px;
+  stroke-width: 0.7px;
+}
+
+.ink2md-dropzone-pen-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -45%);
+  color: var(--interactive-accent);
+}
+
+.ink2md-dropzone-pen-icon svg {
+  width: 48px;
+  height: 48px;
+  stroke-width: 1.5px;
+}
+
+.ink2md-dropzone-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.ink2md-dropzone-subtitle {
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.ink2md-drop-status {
+  color: var(--text-muted);
+  font-size: 0.9rem;
 }
