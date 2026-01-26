@@ -89,6 +89,7 @@ export interface Ink2MDSettings {
 	sources: SourceConfig[];
 	llmPresets: LLMPreset[];
 	processedSources: Record<string, ProcessedSourceInfo>;
+	secretBindings: Record<string, string>;
 }
 
 export interface MarkdownGenerationContext {

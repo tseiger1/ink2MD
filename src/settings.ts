@@ -1,6 +1,12 @@
-import { AbstractInputSuggest, App, Modal, Notice, PluginSettingTab, Setting, SliderComponent } from 'obsidian';
+import { AbstractInputSuggest, App, Modal, Notice, PluginSettingTab, Setting, SliderComponent, setIcon } from 'obsidian';
 import Ink2MDPlugin from './main';
 import { Ink2MDSettings, LLMGenerationMode, LLMProvider, LLMPreset, SourceConfig } from './types';
+
+type PresetSecretState = {
+  hasSecret: boolean;
+  dirty: boolean;
+  cleared: boolean;
+};
 
 const DEFAULT_PROMPT = `Convert handwritten notes to markdown. Treat all supplied pages as one note.
 
@@ -18,783 +24,981 @@ Return plain markdown without any additional text or annotations.`;
 
 const DEFAULT_PRESET_ID = 'preset-default';
 const DEFAULT_SOURCE_ID = 'source-default';
+const DEFAULT_OUTPUT_ROOT = 'Ink2MD';
+const DEFAULT_SOURCE_LABEL = 'Source';
 
 const DEFAULT_LLM_PRESET: LLMPreset = {
-	id: DEFAULT_PRESET_ID,
-	label: 'Default preset',
-	provider: 'openai',
-	generationMode: 'batch',
-	llmMaxWidth: 512,
-	openAI: {
-		apiKey: '',
-		model: 'gpt-4o-mini',
-		promptTemplate: DEFAULT_PROMPT,
-		imageDetail: 'low',
-	},
-	local: {
-		endpoint: 'http://localhost:11434/v1/chat/completions',
-		apiKey: '',
-		model: 'llama-vision',
-		promptTemplate: DEFAULT_PROMPT,
-		imageDetail: 'low',
-	},
+  id: DEFAULT_PRESET_ID,
+  label: 'Default preset',
+  provider: 'openai',
+  generationMode: 'batch',
+  llmMaxWidth: 512,
+  openAI: {
+    apiKey: '',
+    model: 'gpt-5.2',
+    promptTemplate: DEFAULT_PROMPT,
+    imageDetail: 'low',
+  },
+  local: {
+    endpoint: 'http://localhost:11434/v1/chat/completions',
+    apiKey: '',
+    model: 'llama-vision',
+    promptTemplate: DEFAULT_PROMPT,
+    imageDetail: 'low',
+  },
 };
 
 const DEFAULT_SOURCE: SourceConfig = {
-	id: DEFAULT_SOURCE_ID,
-	label: 'Default source',
-	type: 'filesystem',
-	directories: [],
-	recursive: true,
-	includeImages: true,
-	includePdfs: true,
-	includeSupernote: true,
-	attachmentMaxWidth: 0,
-	pdfDpi: 300,
-	replaceExisting: false,
-	outputFolder: 'Ink2MD',
-	openGeneratedNotes: false,
-	openInNewLeaf: true,
-	llmPresetId: DEFAULT_PRESET_ID,
+  id: DEFAULT_SOURCE_ID,
+  label: DEFAULT_SOURCE_LABEL,
+  type: 'filesystem',
+  directories: [],
+  recursive: true,
+  includeImages: true,
+  includePdfs: true,
+  includeSupernote: true,
+  attachmentMaxWidth: 0,
+  pdfDpi: 300,
+  replaceExisting: false,
+  outputFolder: `${DEFAULT_OUTPUT_ROOT}/${DEFAULT_SOURCE_LABEL}`,
+  openGeneratedNotes: false,
+  openInNewLeaf: true,
+  llmPresetId: DEFAULT_PRESET_ID,
 };
 
 export const DEFAULT_SETTINGS: Ink2MDSettings = {
-	sources: [DEFAULT_SOURCE],
-	llmPresets: [DEFAULT_LLM_PRESET],
-	processedSources: {},
+  sources: [DEFAULT_SOURCE],
+  llmPresets: [DEFAULT_LLM_PRESET],
+  processedSources: {},
+  secretBindings: {},
 };
 
 export class Ink2MDSettingTab extends PluginSettingTab {
-	plugin: Ink2MDPlugin;
+  plugin: Ink2MDPlugin;
+  private expandedSources = new Set<string>();
+  private expandedPresets = new Set<string>();
+  private sourceDrafts = new Map<string, SourceConfig>();
+  private presetDrafts = new Map<string, LLMPreset>();
+  private presetSecretStates = new Map<string, PresetSecretState>();
 
-	constructor(app: App, plugin: Ink2MDPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
+  constructor(app: App, plugin: Ink2MDPlugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
 
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
-		containerEl.createEl('h2', { text: 'Ink2MD' });
-		this.renderSourcesSection(containerEl);
-		this.renderPresetsSection(containerEl);
-	}
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+    const hero = containerEl.createDiv({ cls: 'ink2md-hero' });
+    const icon = hero.createSpan({ cls: 'ink2md-hero-icon' });
+    setIcon(icon, 'pen-tool' as any);
+    const heroText = hero.createDiv({ cls: 'ink2md-hero-text' });
+    heroText.createEl('h2', { text: 'Ink2MD' });
+    heroText.createEl('p', {
+      text: 'Import handwritten notes, convert them to markdown, and summarize them with a vision LLM.',
+    });
+    this.renderSourcesSection(containerEl);
+    this.renderPresetsSection(containerEl);
+  }
 
-	private renderSourcesSection(containerEl: HTMLElement) {
-		const sectionEl = this.createSection(
-			containerEl,
-			'Sources',
-			'Define folders to watch and how their imports should behave. Each source can use a different preset.',
-		);
+  private renderSourcesSection(containerEl: HTMLElement) {
+    const { sectionEl, actions } = this.createSection(
+      containerEl,
+      'Sources',
+      'Define input sources to watch.',
+    );
 
-		new Setting(sectionEl)
-			.setName('Sources')
-			.setDesc('Add inputs for different notebook exports or workflows.')
-			.addButton((button) =>
-				button
-					.setButtonText('+ Add source')
-					.onClick(() => this.openSourceModal()),
-			);
+    this.createTextButton(actions, 'Clear all caches', async () => {
+      if (!(await this.confirmReset())) {
+        return;
+      }
+      this.plugin.settings.processedSources = {};
+      await this.plugin.saveSettings();
+      new Notice('Ink2MD: cleared cache for every source.');
+    }, !this.hasAnyCache());
+    this.createTextButton(actions, '+ Add source', () => {
+      const preset = this.plugin.settings.llmPresets[0];
+      if (!preset) {
+        new Notice('Create a preset before adding sources.');
+        return;
+      }
+      const label = `Source ${this.plugin.settings.sources.length + 1}`;
+      const newSource: SourceConfig = {
+        ...this.cloneSource(DEFAULT_SOURCE),
+        id: this.createId('source'),
+        label,
+        outputFolder: this.getDefaultOutputFolder(label),
+        llmPresetId: preset.id,
+      };
+      this.plugin.settings.sources.unshift(newSource);
+      this.expandedSources.add(newSource.id);
+      this.sourceDrafts.set(newSource.id, this.cloneSource(newSource));
+      void this.plugin.saveSettings();
+      this.display();
+    });
 
-		for (const source of this.plugin.settings.sources) {
-			this.renderSourceRow(sectionEl, source);
-		}
+    const list = sectionEl.createDiv({ cls: 'ink2md-card-list' });
+    for (const source of this.plugin.settings.sources) {
+      this.renderSourceCard(list, source);
+    }
+  }
 
-		new Setting(sectionEl)
-			.setName('Processed files cache')
-			.setDesc('Reset the global cache if files were removed or renamed outside of Ink2MD.')
-			.addButton((button) =>
-				button
-					.setButtonText('Reset all')
-					.onClick(async () => {
-						const confirmed = await this.confirmReset();
-						if (!confirmed) {
-							return;
-						}
-						this.plugin.settings.processedSources = {};
-						await this.plugin.saveSettings();
-						new Notice('Ink2MD: processed cache cleared.');
-					}),
-			);
-	}
+  private renderSourceCard(containerEl: HTMLElement, source: SourceConfig) {
+    const card = containerEl.createDiv({ cls: 'ink2md-card' });
+    const header = card.createDiv({ cls: 'ink2md-card-header' });
+    const titleEl = header.createEl('strong', { text: source.label });
+    const summaryEl = header.createEl('span', { text: this.describeSource(source) });
+    summaryEl.addClass('ink2md-card-summary');
+    const actions = header.createDiv({ cls: 'ink2md-card-actions' });
+    const expanded = this.expandedSources.has(source.id);
+    this.createTextButton(actions, 'Clear cache', () => this.confirmClearSourceCache(source.id), !this.hasSourceCache(source.id));
+    if (expanded) {
+      this.createIconButton(actions, 'save', 'Save changes', () => this.saveSourceDraft(source.id));
+      this.createIconButton(actions, 'x', 'Cancel changes', () => this.cancelSourceDraft(source.id));
+    } else {
+      this.createIconButton(actions, 'pencil', 'Edit source', () => this.expandSource(source.id));
+    }
+    this.createIconButton(actions, 'trash', 'Delete source', () => this.confirmDeleteSource(source.id), true);
 
-	private renderSourceRow(containerEl: HTMLElement, source: SourceConfig) {
-		const preset = this.plugin.settings.llmPresets.find((entry) => entry.id === source.llmPresetId);
-		const directories = source.directories.length ? source.directories.join(', ') : 'No directories configured';
-		const desc = `Folders: ${directories}\nLLM preset: ${preset?.label ?? 'Not set'}`;
-		const row = new Setting(containerEl)
-			.setName(source.label)
-			.setDesc(desc);
-		row.addExtraButton((button) =>
-			button
-				.setIcon('refresh-ccw')
-				.setTooltip('Clear cache for this source')
-				.onClick(async () => {
-					await this.clearSourceCache(source.id);
-				}),
-		);
-		row.addExtraButton((button) =>
-			button
-				.setIcon('pencil')
-				.setTooltip('Edit source')
-				.onClick(() => this.openSourceModal(source)),
-		);
-		row.addExtraButton((button) =>
-			button
-				.setIcon('trash')
-				.setTooltip('Delete source')
-				.onClick(async () => {
-					await this.deleteSource(source.id);
-				}),
-		);
-	}
+    const body = card.createDiv({ cls: 'ink2md-card-body' });
+    body.style.display = expanded ? '' : 'none';
+    if (!expanded) {
+      return;
+    }
+    const draft = this.getSourceDraft(source.id, source);
+    this.renderSourceDetails(body, draft, titleEl, summaryEl);
+  }
 
-	private renderPresetsSection(containerEl: HTMLElement) {
-		const sectionEl = this.createSection(
-			containerEl,
-			'LLM presets',
-			'Preset groups hold provider credentials, prompts, and streaming mode. Sources reference them.',
-		);
+  private renderPresetsSection(containerEl: HTMLElement) {
+    const { sectionEl, actions } = this.createSection(
+      containerEl,
+      'LLM presets',
+      'Presets hold LLM settings and prompts.',
+    );
 
-		new Setting(sectionEl)
-			.setName('Presets')
-			.setDesc('Create multiple presets to switch between OpenAI and local endpoints on demand.')
-			.addButton((button) =>
-				button
-					.setButtonText('+ Add preset')
-					.onClick(() => this.openPresetModal()),
-			);
+    actions.createEl('button', { text: '+ Add preset', cls: 'ink2md-text-button' }).addEventListener('click', () => {
+      const newPreset: LLMPreset = {
+        ...this.clonePreset(DEFAULT_LLM_PRESET),
+        id: this.createId('preset'),
+        label: `Preset ${this.plugin.settings.llmPresets.length + 1}`,
+      };
+      this.plugin.settings.llmPresets.unshift(newPreset);
+      this.expandedPresets.add(newPreset.id);
+      this.presetDrafts.set(newPreset.id, this.clonePreset(newPreset));
+      this.presetSecretStates.set(newPreset.id, { hasSecret: false, dirty: false, cleared: false });
+      void this.plugin.saveSettings();
+      this.display();
+    });
 
-		for (const preset of this.plugin.settings.llmPresets) {
-			const desc = `Provider: ${preset.provider === 'openai' ? 'OpenAI' : 'Local'} • Mode: ${preset.generationMode === 'stream' ? 'Streaming' : 'Batch'}`;
-			const row = new Setting(sectionEl)
-				.setName(preset.label)
-				.setDesc(desc);
-			row.addExtraButton((button) =>
-				button
-					.setIcon('pencil')
-					.setTooltip('Edit preset')
-					.onClick(() => this.openPresetModal(preset)),
-			);
-			row.addExtraButton((button) =>
-				button
-					.setIcon('trash')
-					.setTooltip('Delete preset')
-					.onClick(async () => {
-						await this.deletePreset(preset.id);
-					}),
-			);
-		}
-	}
+    const list = sectionEl.createDiv({ cls: 'ink2md-card-list' });
+    for (const preset of this.plugin.settings.llmPresets) {
+      this.renderPresetCard(list, preset);
+    }
+  }
 
-	private createSection(containerEl: HTMLElement, title: string, description: string) {
-		const sectionEl = containerEl.createDiv({ cls: 'ink2md-settings-section' });
-		sectionEl.createEl('h3', { text: title });
-		sectionEl.createEl('p', { text: description });
-		return sectionEl;
-	}
+  private renderPresetCard(containerEl: HTMLElement, preset: LLMPreset) {
+    const card = containerEl.createDiv({ cls: 'ink2md-card' });
+    const header = card.createDiv({ cls: 'ink2md-card-header' });
+    const titleEl = header.createEl('strong', { text: preset.label });
+    const summaryEl = header.createEl('span', { text: this.describePreset(preset) });
+    summaryEl.addClass('ink2md-card-summary');
+    const actions = header.createDiv({ cls: 'ink2md-card-actions' });
+    const expanded = this.expandedPresets.has(preset.id);
 
-	private async clearSourceCache(sourceId: string) {
-		const store = this.plugin.settings.processedSources;
-		let removed = 0;
-		for (const key of Object.keys(store)) {
-			if (store[key]?.sourceId === sourceId) {
-				delete store[key];
-				removed += 1;
-			}
-		}
-		await this.plugin.saveSettings();
-		new Notice(removed ? `Ink2MD: cleared ${removed} cached entries.` : 'Ink2MD: no cached entries for this source.');
-	}
+    if (expanded) {
+      this.createIconButton(actions, 'save', 'Save preset', () => this.savePresetDraft(preset.id));
+      this.createIconButton(actions, 'x', 'Cancel edits', () => this.cancelPresetDraft(preset.id));
+    } else {
+      this.createIconButton(actions, 'pencil', 'Edit preset', () => this.expandPreset(preset.id));
+    }
+    this.createIconButton(actions, 'trash', 'Delete preset', () => this.confirmDeletePreset(preset.id), true);
 
-	private async deleteSource(sourceId: string) {
-		if (this.plugin.settings.sources.length === 1) {
-			new Notice('Ink2MD: at least one source is required.');
-			return;
-		}
-		this.plugin.settings.sources = this.plugin.settings.sources.filter((source) => source.id !== sourceId);
-		await this.clearSourceCache(sourceId);
-		await this.plugin.saveSettings();
-		this.display();
-	}
+    const body = card.createDiv({ cls: 'ink2md-card-body' });
+    body.style.display = expanded ? '' : 'none';
+    if (!expanded) {
+      return;
+    }
+    const draft = this.getPresetDraft(preset.id, preset);
+    this.renderPresetDetails(body, draft, titleEl, summaryEl);
+  }
 
-	private async deletePreset(presetId: string) {
-		const inUse = this.plugin.settings.sources.some((source) => source.llmPresetId === presetId);
-		if (inUse) {
-			new Notice('Ink2MD: this preset is still referenced by at least one source.');
-			return;
-		}
-		if (this.plugin.settings.llmPresets.length === 1) {
-			new Notice('Ink2MD: at least one preset is required.');
-			return;
-		}
-		this.plugin.settings.llmPresets = this.plugin.settings.llmPresets.filter((preset) => preset.id !== presetId);
-		await this.plugin.saveSettings();
-		this.display();
-	}
+  private renderSourceDetails(container: HTMLElement, draft: SourceConfig, titleEl: HTMLElement, summaryEl: HTMLElement) {
+    new Setting(container)
+      .setName('Label')
+      .setDesc('Shown in the source list.')
+      .addText((text) =>
+        text
+          .setValue(draft.label)
+          .onChange((value) => {
+            draft.label = value.trim() || draft.label;
+            titleEl.setText(draft.label);
+          }),
+      );
 
-	private openSourceModal(source?: SourceConfig) {
-		const presets = this.plugin.settings.llmPresets;
-		if (!presets.length) {
-			new Notice('Create an LLM preset before adding sources.');
-			return;
-		}
-		const draft: SourceConfig = source
-			? { ...source, directories: [...source.directories] }
-				: {
-					...DEFAULT_SOURCE,
-					id: createId('source'),
-					label: `Source ${this.plugin.settings.sources.length + 1}`,
-					llmPresetId: presets[0]!.id,
-				};
-		const modal = new SourceEditorModal(this.app, this.plugin, presets, draft, async (updated) => {
-			const existingIndex = this.plugin.settings.sources.findIndex((entry) => entry.id === updated.id);
-			if (existingIndex >= 0) {
-				this.plugin.settings.sources[existingIndex] = updated;
-			} else {
-				this.plugin.settings.sources.unshift(updated);
-			}
-			await this.plugin.saveSettings();
-			this.display();
-		});
-		modal.open();
-	}
+    const directoriesSetting = new Setting(container)
+      .setName('Directories')
+      .setDesc('Absolute paths, one per line. Sub-folders are included when recursive is enabled.');
+    directoriesSetting.controlEl.empty();
+    const directoriesInput = directoriesSetting.controlEl.createEl('textarea', {
+      cls: 'ink2md-source-directories',
+      text: draft.directories.join('\n'),
+    });
+    directoriesInput.rows = 4;
+    directoriesInput.addEventListener('change', () => {
+      draft.directories = directoriesInput.value
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      summaryEl.setText(this.describeSource(draft));
+    });
 
-	private openPresetModal(preset?: LLMPreset) {
-		const draft: LLMPreset = preset
-			? {
-				...preset,
-				openAI: { ...preset.openAI },
-				local: { ...preset.local },
-			}
-			: {
-				...DEFAULT_LLM_PRESET,
-				id: createId('preset'),
-				label: `Preset ${this.plugin.settings.llmPresets.length + 1}`,
-			};
-		const modal = new PresetEditorModal(this.app, this.plugin, draft, async (updated) => {
-			const existingIndex = this.plugin.settings.llmPresets.findIndex((entry) => entry.id === updated.id);
-			if (existingIndex >= 0) {
-				this.plugin.settings.llmPresets[existingIndex] = updated;
-			} else {
-				this.plugin.settings.llmPresets.push(updated);
-			}
-			await this.plugin.saveSettings();
-			this.display();
-		});
-		modal.open();
-	}
+    new Setting(container)
+      .setName('Recursive scan')
+      .setDesc('Include files inside sub-folders automatically.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(draft.recursive)
+          .onChange((value) => {
+            draft.recursive = value;
+          }),
+      );
 
-	private async confirmReset(): Promise<boolean> {
-		return new Promise((resolve) => {
-			const modal = new class extends Modal {
-				constructor(app: App, private readonly onConfirm: (result: boolean) => void) {
-					super(app);
-				}
+    new Setting(container)
+      .setName('Image imports (.png/.jpg/.webp)')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(draft.includeImages)
+          .onChange((value) => {
+            draft.includeImages = value;
+          }),
+      );
 
-				onOpen() {
-					const { contentEl } = this;
-					contentEl.createEl('h3', { text: 'Reset processed files?' });
-					contentEl.createEl('p', {
-						text: 'This clears the cache of already-imported files so the next import reprocesses everything.',
-					});
-					const buttonBar = contentEl.createDiv({ cls: 'ink2md-modal-buttons' });
-					const cancel = buttonBar.createEl('button', { text: 'Cancel' });
-					const confirm = buttonBar.createEl('button', { text: 'Reset' });
-					confirm.addClass('mod-warning');
-					cancel.addEventListener('click', () => {
-						this.close();
-						this.onConfirm(false);
-					});
-					confirm.addEventListener('click', () => {
-						this.close();
-						this.onConfirm(true);
-					});
-				}
+    new Setting(container)
+      .setName('PDF imports')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(draft.includePdfs)
+          .onChange((value) => {
+            draft.includePdfs = value;
+          }),
+      );
 
-				onClose() {
-					this.contentEl.empty();
-				}
-			}(this.app, resolve);
-			modal.open();
-		});
-	}
-}
+    new Setting(container)
+      .setName('Supernote imports (.note)')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(draft.includeSupernote)
+          .onChange((value) => {
+            draft.includeSupernote = value;
+          }),
+      );
 
-class SourceEditorModal extends Modal {
-	private draft: SourceConfig;
-	private readonly presets: LLMPreset[];
-	private readonly onSave: (source: SourceConfig) => Promise<void> | void;
-	private readonly plugin: Ink2MDPlugin;
+    new Setting(container)
+      .setName('Output folder')
+      .setDesc('Vault folder where converted notes are saved.')
+      .addSearch((search) => {
+        search
+          .setPlaceholder(`${DEFAULT_OUTPUT_ROOT}/My source`)
+          .setValue(draft.outputFolder)
+          .onChange((value) => {
+            draft.outputFolder = value.trim() || this.getDefaultOutputFolder(draft.label);
+          });
+        new FolderSuggest(this.app, search.inputEl);
+      });
 
-	constructor(app: App, plugin: Ink2MDPlugin, presets: LLMPreset[], draft: SourceConfig, onSave: (source: SourceConfig) => Promise<void> | void) {
-		super(app);
-		this.plugin = plugin;
-		this.presets = presets;
-		this.draft = { ...draft, directories: [...draft.directories] };
-		this.onSave = onSave;
-	}
+    new Setting(container)
+      .setName('Replace existing imports')
+      .setDesc('Overwrite previous runs instead of creating timestamped folders.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(draft.replaceExisting)
+          .onChange((value) => {
+            draft.replaceExisting = value;
+          }),
+      );
 
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.empty();
-		const isNew = !this.plugin.settings.sources.some((entry) => entry.id === this.draft.id);
-		contentEl.createEl('h3', { text: isNew ? 'Add source' : 'Edit source' });
+    this.renderSliderSetting({
+      containerEl: container,
+      name: 'Attachment PNG width',
+      desc: 'Scale images saved to the vault. Set to 0 to keep originals.',
+      min: 0,
+      max: 4096,
+      step: 64,
+      value: draft.attachmentMaxWidth,
+      formatValue: (value) => (value === 0 ? 'Original size' : `${value}px`),
+      onChange: (value) => {
+        draft.attachmentMaxWidth = value;
+      },
+    });
 
-		new Setting(contentEl)
-			.setName('Label')
-			.setDesc('Displayed in the source list.')
-			.addText((text) =>
-				text
-					.setValue(this.draft.label)
-					.onChange((value) => {
-						this.draft.label = value.trim() || this.draft.label;
-					}),
-			);
+    this.renderSliderSetting({
+      containerEl: container,
+      name: 'PDF rasterization DPI',
+      desc: 'Higher values improve fidelity at the cost of larger files.',
+      min: 72,
+      max: 600,
+      step: 12,
+      value: draft.pdfDpi,
+      formatValue: (value) => `${value} DPI`,
+      onChange: (value) => {
+        draft.pdfDpi = value;
+      },
+    });
 
-		new Setting(contentEl)
-			.setName('Source type')
-			.setDesc('Currently only local file-system scanning is supported.')
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption('filesystem', 'File system')
-					.setValue('filesystem')
-					.setDisabled(true),
-			);
+    new Setting(container)
+      .setName('Open generated notes')
+      .setDesc('Choose where converted notes open after each import.')
+      .addDropdown((dropdown) => {
+        const currentValue = draft.openGeneratedNotes ? (draft.openInNewLeaf ? 'new' : 'current') : 'none';
+        dropdown
+          .addOption('none', 'Do not open automatically')
+          .addOption('current', 'Open in current tab')
+          .addOption('new', 'Open in new tab')
+          .setValue(currentValue)
+          .onChange((value) => {
+            if (value === 'none') {
+              draft.openGeneratedNotes = false;
+              draft.openInNewLeaf = false;
+              return;
+            }
+            draft.openGeneratedNotes = true;
+            draft.openInNewLeaf = value === 'new';
+          });
+      });
 
-		const directories = contentEl.createEl('textarea', {
-			cls: 'ink2md-source-directories',
-			text: this.draft.directories.join('\n'),
-		});
-		directories.rows = 4;
-		new Setting(contentEl)
-			.setName('Directories')
-			.setDesc('Absolute paths, one per line. Sub-folders are included when recursive is enabled.');
-		directories.addEventListener('input', () => {
-			this.draft.directories = directories.value
-				.split('\n')
-				.map((line) => line.trim())
-				.filter(Boolean);
-		});
+    new Setting(container)
+      .setName('LLM preset')
+      .setDesc('Pick which preset powers this source.')
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOptions(Object.fromEntries(this.plugin.settings.llmPresets.map((preset) => [preset.id, preset.label])))
+          .setValue(draft.llmPresetId ?? this.plugin.settings.llmPresets[0]?.id ?? DEFAULT_PRESET_ID)
+          .onChange((value) => {
+            draft.llmPresetId = value;
+            summaryEl.setText(this.describeSource(draft));
+          });
+      });
+  }
 
-		new Setting(contentEl)
-			.setName('Recursive scan')
-			.setDesc('When enabled, Ink2MD walks all sub-folders inside the configured paths.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.draft.recursive)
-					.onChange((value) => {
-						this.draft.recursive = value;
-					}),
-			);
+  private renderPresetDetails(container: HTMLElement, draft: LLMPreset, titleEl: HTMLElement, summaryEl: HTMLElement) {
+    new Setting(container)
+      .setName('Label')
+      .setDesc('Shown in the source dropdown.')
+      .addText((text) =>
+        text
+          .setValue(draft.label)
+          .onChange((value) => {
+            draft.label = value.trim() || draft.label;
+            titleEl.setText(draft.label);
+          }),
+      );
 
-		new Setting(contentEl)
-			.setName('File types')
-			.setDesc('Choose which importers run for this source.')
-			.addToggle((toggle) =>
-				toggle
-					.setTooltip('Images (.png/.jpg/.webp)')
-					.setValue(this.draft.includeImages)
-					.onChange((value) => (this.draft.includeImages = value)))
-			.addToggle((toggle) =>
-				toggle
-					.setTooltip('PDFs')
-					.setValue(this.draft.includePdfs)
-					.onChange((value) => (this.draft.includePdfs = value)))
-			.addToggle((toggle) =>
-				toggle
-					.setTooltip('Supernote (.note)')
-					.setValue(this.draft.includeSupernote)
-					.onChange((value) => (this.draft.includeSupernote = value)));
+    new Setting(container)
+      .setName('Provider')
+      .setDesc('Choose between OpenAI and a local OpenAI-compatible endpoint.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('openai', 'OpenAI')
+          .addOption('local', 'Local')
+          .setValue(draft.provider)
+          .onChange((value) => {
+            draft.provider = value as LLMProvider;
+            summaryEl.setText(this.describePreset(draft));
+            this.display();
+          }),
+      );
 
-		new Setting(contentEl)
-			.setName('Output folder')
-			.setDesc('Vault folder where converted notes should be stored.')
-			.addSearch((search) => {
-				search
-					.setPlaceholder('Ink2MD')
-					.setValue(this.draft.outputFolder)
-					.onChange((value) => {
-						this.draft.outputFolder = value.trim() || 'Ink2MD';
-					});
-				new FolderSuggest(this.app, search.inputEl);
-			});
+    new Setting(container)
+      .setName('Generation mode')
+      .setDesc('Streaming writes tokens to disk live; batch waits for completion.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('batch', 'Batch')
+          .addOption('stream', 'Streaming')
+          .setValue(draft.generationMode)
+          .onChange((value) => {
+            draft.generationMode = value as LLMGenerationMode;
+            summaryEl.setText(this.describePreset(draft));
+          }),
+      );
 
-		new Setting(contentEl)
-			.setName('Replace existing')
-			.setDesc('Overwrite previous imports instead of creating timestamped folders.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.draft.replaceExisting)
-					.onChange((value) => (this.draft.replaceExisting = value)));
+    this.renderSliderSetting({
+      containerEl: container,
+      name: 'LLM image width',
+      desc: 'Downscale pages sent to the LLM. Set to 0 to keep originals.',
+      min: 0,
+      max: 2048,
+      step: 32,
+      value: draft.llmMaxWidth,
+      formatValue: (value) => (value === 0 ? 'Original size' : `${value}px`),
+      onChange: (value) => {
+        draft.llmMaxWidth = value;
+      },
+    });
 
-		this.renderSliderSetting({
-			containerEl: contentEl,
-			name: 'Attachment width',
-			desc: 'Scale images saved to the vault down to this width. Set to 0 to keep the original size.',
-			min: 0,
-			max: 4096,
-			step: 64,
-			value: this.draft.attachmentMaxWidth,
-			formatValue: (value) => (value === 0 ? 'Original size' : `${value}px`),
-			onChange: (value) => {
-				this.draft.attachmentMaxWidth = value;
-			},
-		});
+    const providerFields = container.createDiv({ cls: 'ink2md-provider-fields' });
+    if (draft.provider === 'openai') {
+      this.renderOpenAIFields(providerFields, draft, this.getPresetSecretState(draft.id));
+    } else {
+      this.renderLocalFields(providerFields, draft);
+    }
+  }
 
-		this.renderSliderSetting({
-			containerEl: contentEl,
-			name: 'PDF render DPI',
-			desc: 'Controls the base resolution when rasterizing PDF pages.',
-			min: 72,
-			max: 600,
-			step: 12,
-			value: this.draft.pdfDpi,
-			formatValue: (value) => `${value} DPI`,
-			onChange: (value) => {
-				this.draft.pdfDpi = value;
-			},
-		});
+  private renderOpenAIFields(container: HTMLElement, draft: LLMPreset, secretState: PresetSecretState) {
+    const apiKeySetting = new Setting(container).setName('API key');
+    apiKeySetting.setDesc('');
+    const descEl = apiKeySetting.descEl;
+    descEl.empty();
+    descEl.createSpan({ text: 'OpenAI API key used for this preset.' });
+    for (const line of this.describeSecretStorageLines(draft.id)) {
+      descEl.createEl('br');
+      descEl.createSpan({ text: line });
+    }
+    apiKeySetting.addText((text) => {
+        const placeholder = '••••••••';
+        const canShowPlaceholder = secretState.hasSecret && !secretState.cleared && !secretState.dirty && !draft.openAI.apiKey;
+        let showingPlaceholder = false;
+        text.setPlaceholder('sk-...');
+        if (canShowPlaceholder) {
+          text.setValue(placeholder);
+          showingPlaceholder = true;
+        } else {
+          text.setValue(draft.openAI.apiKey);
+        }
+        text.onChange((value) => {
+          if (showingPlaceholder) {
+            return;
+          }
+          const trimmed = value.trim();
+          draft.openAI.apiKey = trimmed;
+          secretState.dirty = true;
+          secretState.cleared = trimmed.length === 0;
+        });
+        text.inputEl.type = 'password';
+        text.inputEl.autocomplete = 'off';
+        text.inputEl.addEventListener('focus', () => {
+          if (showingPlaceholder) {
+            showingPlaceholder = false;
+            text.setValue('');
+          }
+        });
+        text.inputEl.addEventListener('blur', () => {
+          if (!secretState.dirty && secretState.hasSecret && !secretState.cleared && !text.inputEl.value) {
+            showingPlaceholder = true;
+            text.setValue(placeholder);
+          }
+        });
+      });
 
-		new Setting(contentEl)
-			.setName('Open generated notes automatically')
-			.setDesc('Useful when streaming so you can watch notes update live.')
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.draft.openGeneratedNotes)
-					.onChange((value) => (this.draft.openGeneratedNotes = value)));
+    new Setting(container)
+      .setName('Model')
+      .addText((text) =>
+        text
+          .setValue(draft.openAI.model)
+          .onChange((value) => {
+            draft.openAI.model = value.trim();
+          }),
+      );
 
-		new Setting(contentEl)
-			.setName('Open location')
-			.setDesc('Choose where the file opens when auto-open is enabled.')
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption('new', 'New tab')
-					.addOption('current', 'Current tab')
-					.setDisabled(!this.draft.openGeneratedNotes)
-					.setValue(this.draft.openInNewLeaf ? 'new' : 'current')
-					.onChange((value) => {
-						this.draft.openInNewLeaf = value !== 'current';
-					}));
+    new Setting(container)
+      .setName('Image detail')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('low', 'Low')
+          .addOption('high', 'High')
+          .setValue(draft.openAI.imageDetail)
+          .onChange((value) => {
+            draft.openAI.imageDetail = value === 'high' ? 'high' : 'low';
+          }),
+      );
 
-		new Setting(contentEl)
-			.setName('LLM preset')
-			.setDesc('Select which LLM configuration drives this source.')
-			.addDropdown((dropdown) => {
-				dropdown
-						.addOptions(
-							Object.fromEntries(this.presets.map((preset) => [preset.id, preset.label])),
-						)
-						.setValue(this.draft.llmPresetId ?? this.presets[0]!.id)
-					.onChange((value) => {
-						this.draft.llmPresetId = value;
-					});
-			});
+    this.renderPromptTextarea(container, draft.openAI.promptTemplate, (value) => {
+      draft.openAI.promptTemplate = value;
+    });
+  }
 
-		const buttonBar = contentEl.createDiv({ cls: 'ink2md-modal-buttons' });
-		buttonBar.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.close());
-		const saveBtn = buttonBar.createEl('button', { text: 'Save' });
-		saveBtn.classList.add('mod-cta');
-		saveBtn.addEventListener('click', async () => {
-			await this.onSave({ ...this.draft });
-			this.close();
-		});
-	}
+  private renderLocalFields(container: HTMLElement, draft: LLMPreset) {
+    new Setting(container)
+      .setName('Endpoint URL')
+      .setDesc('HTTP endpoint that accepts OpenAI-compatible chat completions requests.')
+      .addText((text) =>
+        text
+          .setPlaceholder('http://localhost:11434/v1/chat/completions')
+          .setValue(draft.local.endpoint)
+          .onChange((value) => {
+            draft.local.endpoint = value.trim();
+          }),
+      );
 
-	private renderSliderSetting(options: {
-		containerEl: HTMLElement;
-		name: string;
-		desc: string;
-		min: number;
-		max: number;
-		step: number;
-		value: number;
-		formatValue: (value: number) => string;
-		onChange: (value: number) => void;
-	}) {
-		const setting = new Setting(options.containerEl)
-			.setName(options.name)
-			.setDesc(options.desc);
-		let valueEl: HTMLSpanElement | null = null;
-		const slider = new SliderComponent(setting.controlEl)
-			.setLimits(options.min, options.max, options.step)
-			.setDynamicTooltip()
-			.setValue(options.value)
-			.onChange((value) => {
-				options.onChange(value);
-				valueEl?.setText(options.formatValue(value));
-			});
-		valueEl = setting.controlEl.createSpan({
-			cls: 'ink2md-slider-value',
-			text: options.formatValue(options.value),
-		});
-		slider.sliderEl.insertAdjacentElement('afterend', valueEl);
-	}
-}
+    new Setting(container)
+      .setName('API key (optional)')
+      .addText((text) =>
+        text
+          .setValue(draft.local.apiKey)
+          .onChange((value) => {
+            draft.local.apiKey = value.trim();
+          }),
+      );
 
-class PresetEditorModal extends Modal {
-	private draft: LLMPreset;
-	private readonly onSave: (preset: LLMPreset) => Promise<void> | void;
-	private readonly plugin: Ink2MDPlugin;
-	private openAiKey: string;
+    new Setting(container)
+      .setName('Model name')
+      .addText((text) =>
+        text
+          .setValue(draft.local.model)
+          .onChange((value) => {
+            draft.local.model = value.trim();
+          }),
+      );
 
-	constructor(app: App, plugin: Ink2MDPlugin, draft: LLMPreset, onSave: (preset: LLMPreset) => Promise<void> | void) {
-		super(app);
-		this.plugin = plugin;
-		this.draft = draft;
-		this.onSave = onSave;
-		this.openAiKey = this.plugin.getOpenAISecret(this.draft.id);
-	}
+    new Setting(container)
+      .setName('Image detail')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('low', 'Low')
+          .addOption('high', 'High')
+          .setValue(draft.local.imageDetail)
+          .onChange((value) => {
+            draft.local.imageDetail = value === 'high' ? 'high' : 'low';
+          }),
+      );
 
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.empty();
-		const isNew = !this.plugin.settings.llmPresets.some((entry) => entry.id === this.draft.id);
-		contentEl.createEl('h3', { text: isNew ? 'Add preset' : 'Edit preset' });
+    this.renderPromptTextarea(container, draft.local.promptTemplate, (value) => {
+      draft.local.promptTemplate = value;
+    });
+  }
 
-		new Setting(contentEl)
-			.setName('Label')
-			.setDesc('Displayed in source dropdowns.')
-			.addText((text) =>
-				text
-					.setValue(this.draft.label)
-					.onChange((value) => {
-						this.draft.label = value.trim() || this.draft.label;
-					}),
-			);
+  private createSection(containerEl: HTMLElement, title: string, description: string) {
+    const sectionEl = containerEl.createDiv({ cls: 'ink2md-settings-section' });
+    const header = sectionEl.createDiv({ cls: 'ink2md-section-header' });
+    const info = header.createDiv({ cls: 'ink2md-section-info' });
+    info.createEl('h3', { text: title });
+    info.createEl('p', { text: description });
+    const actions = header.createDiv({ cls: 'ink2md-header-actions' });
+    return { sectionEl, actions };
+  }
 
-		new Setting(contentEl)
-			.setName('Provider')
-			.setDesc('Choose between hosted OpenAI models or a local OpenAI-compatible endpoint.')
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption('openai', 'OpenAI')
-					.addOption('local', 'Local')
-					.setValue(this.draft.provider)
-					.onChange((value) => {
-						this.draft.provider = value as LLMProvider;
-						this.displayProviderFields(contentEl);
-					}),
-			);
+  private describeSource(source: SourceConfig): string {
+    const parts = [];
+    const dirCount = source.directories.length;
+    if (dirCount === 0) {
+      parts.push('No folders');
+    } else if (dirCount === 1) {
+      parts.push('1 folder');
+    } else {
+      parts.push(`${dirCount} folders`);
+    }
+    const preset = this.plugin.settings.llmPresets.find((entry) => entry.id === source.llmPresetId);
+    if (preset) {
+      parts.push(`Preset: ${preset.label}`);
+    }
+    return parts.join(' • ');
+  }
 
-		new Setting(contentEl)
-			.setName('Generation mode')
-			.setDesc('Streaming writes Markdown tokens directly to disk; batch waits for the full response.')
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption('batch', 'Batch')
-					.addOption('stream', 'Streaming')
-					.setValue(this.draft.generationMode)
-					.onChange((value) => {
-						this.draft.generationMode = value as LLMGenerationMode;
-					}),
-			);
+  private describePreset(preset: LLMPreset): string {
+    return `Provider: ${preset.provider === 'openai' ? 'OpenAI' : 'Local'} • Mode: ${preset.generationMode === 'stream' ? 'Streaming' : 'Batch'}`;
+  }
 
-		this.renderSliderSetting({
-			containerEl: contentEl,
-			name: 'LLM image width',
-			desc: 'Pages sent to the LLM can be downscaled separately to reduce tokens and bandwidth.',
-			min: 0,
-			max: 2048,
-			step: 32,
-			value: this.draft.llmMaxWidth,
-			formatValue: (value) => (value === 0 ? 'Original size' : `${value}px`),
-			onChange: (value) => {
-				this.draft.llmMaxWidth = value;
-			},
-		});
+  private getDefaultOutputFolder(label: string) {
+    const trimmed = label?.trim() || 'Source';
+    return `${DEFAULT_OUTPUT_ROOT}/${trimmed}`;
+  }
 
-		this.displayProviderFields(contentEl);
+  private getSourceDraft(id: string, source: SourceConfig): SourceConfig {
+    if (!this.sourceDrafts.has(id)) {
+      this.sourceDrafts.set(id, this.cloneSource(source));
+    }
+    return this.sourceDrafts.get(id)!;
+  }
 
-		const buttonBar = contentEl.createDiv({ cls: 'ink2md-modal-buttons' });
-		buttonBar.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.close());
-		const saveBtn = buttonBar.createEl('button', { text: 'Save' });
-		saveBtn.classList.add('mod-cta');
-		saveBtn.addEventListener('click', async () => {
-			if (this.draft.provider === 'openai') {
-				await this.plugin.setOpenAISecret(this.draft.id, this.openAiKey);
-			}
-			await this.onSave({ ...this.draft, openAI: { ...this.draft.openAI, apiKey: '' } });
-			this.close();
-		});
-	}
+  private getPresetDraft(id: string, preset: LLMPreset): LLMPreset {
+    if (!this.presetDrafts.has(id)) {
+      this.presetDrafts.set(id, this.clonePreset(preset));
+    }
+    return this.presetDrafts.get(id)!;
+  }
 
-	private displayProviderFields(contentEl: HTMLElement) {
-		contentEl.querySelectorAll('.ink2md-provider-fields').forEach((el) => el.remove());
-		if (this.draft.provider === 'openai') {
-			this.renderOpenAIFields(contentEl);
-		} else {
-			this.renderLocalFields(contentEl);
-		}
-	}
+  private getPresetSecretState(id: string): PresetSecretState {
+    if (!this.presetSecretStates.has(id)) {
+      this.presetSecretStates.set(id, {
+        hasSecret: this.plugin.hasOpenAISecret(id),
+        dirty: false,
+        cleared: false,
+      });
+    }
+    return this.presetSecretStates.get(id)!;
+  }
 
-	private renderOpenAIFields(contentEl: HTMLElement) {
-		const container = contentEl.createDiv({ cls: 'ink2md-provider-fields' });
-		new Setting(container)
-			.setName('API key')
-			.setDesc('Stored securely when available. Required for OpenAI requests.')
-			.addText((text) => {
-				text
-					.setPlaceholder('sk-...')
-					.setValue(this.openAiKey)
-					.onChange((value) => {
-						this.openAiKey = value.trim();
-					});
-				text.inputEl.type = 'password';
-				text.inputEl.autocomplete = 'off';
-			});
+  private async clearSourceCache(sourceId: string) {
+    const store = this.plugin.settings.processedSources;
+    let removed = 0;
+    for (const key of Object.keys(store)) {
+      if (store[key]?.sourceId === sourceId) {
+        delete store[key];
+        removed += 1;
+      }
+    }
+    await this.plugin.saveSettings();
+    if (removed > 0) {
+      new Notice(`Ink2MD: cleared ${removed} cached entries.`);
+    }
+  }
 
-		new Setting(container)
-			.setName('Model')
-			.setDesc('Vision-capable OpenAI model, e.g., gpt-4o-mini.')
-			.addText((text) =>
-				text
-					.setValue(this.draft.openAI.model)
-					.onChange((value) => (this.draft.openAI.model = value.trim())));
+  private async confirmDeleteSource(sourceId: string) {
+    const confirmed = await this.confirmAction({
+      title: "Delete source?",
+      message: "This removes the source configuration.",
+      confirmLabel: "Delete",
+      confirmWarning: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+    await this.deleteSource(sourceId);
+  }
 
-		new Setting(container)
-			.setName('Image detail')
-			.setDesc('Controls the detail level sent to the vision model.')
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption('low', 'Low')
-					.addOption('high', 'High')
-					.setValue(this.draft.openAI.imageDetail)
-					.onChange((value) => (this.draft.openAI.imageDetail = value as 'low' | 'high')));
+  private hasSourceCache(sourceId: string): boolean {
+    return Object.values(this.plugin.settings.processedSources).some((entry) => entry?.sourceId === sourceId);
+  }
 
-		this.renderPromptTextarea(container, this.draft.openAI.promptTemplate, (value) => {
-			this.draft.openAI.promptTemplate = value;
-		});
-	}
+  private hasAnyCache(): boolean {
+    return Object.keys(this.plugin.settings.processedSources).length > 0;
+  }
 
-	private renderLocalFields(contentEl: HTMLElement) {
-		const container = contentEl.createDiv({ cls: 'ink2md-provider-fields' });
-		new Setting(container)
-			.setName('Endpoint URL')
-			.setDesc('HTTP endpoint that accepts OpenAI-compatible chat completion requests.')
-			.addText((text) =>
-				text
-					.setPlaceholder('http://localhost:11434/v1/chat/completions')
-					.setValue(this.draft.local.endpoint)
-					.onChange((value) => (this.draft.local.endpoint = value.trim())));
+  private async deleteSource(sourceId: string) {
+    if (this.plugin.settings.sources.length === 1) {
+      new Notice('Ink2MD: at least one source is required.');
+      return;
+    }
+    this.plugin.settings.sources = this.plugin.settings.sources.filter((source) => source.id !== sourceId);
+    this.sourceDrafts.delete(sourceId);
+    await this.clearSourceCache(sourceId);
+    await this.plugin.saveSettings();
+    new Notice('Ink2MD: source deleted.');
+    this.display();
+  }
 
-		new Setting(container)
-			.setName('API key (optional)')
-			.setDesc('Sent as a Bearer token when provided.')
-			.addText((text) =>
-				text
-					.setValue(this.draft.local.apiKey)
-					.onChange((value) => (this.draft.local.apiKey = value.trim())));
+  private async confirmDeletePreset(presetId: string) {
+    const confirmed = await this.confirmAction({
+      title: "Delete preset?",
+      message: "This preset will be removed.",
+      confirmLabel: "Delete",
+      confirmWarning: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+    await this.deletePreset(presetId);
+  }
 
-		new Setting(container)
-			.setName('Model name')
-			.setDesc('Identifier understood by your local server.')
-			.addText((text) =>
-				text
-					.setValue(this.draft.local.model)
-					.onChange((value) => (this.draft.local.model = value.trim())));
+  private async deletePreset(presetId: string) {
+    const inUse = this.plugin.settings.sources.some((source) => source.llmPresetId === presetId);
+    if (inUse) {
+      new Notice('Ink2MD: this preset is still referenced by at least one source.');
+      return;
+    }
+    if (this.plugin.settings.llmPresets.length === 1) {
+      new Notice('Ink2MD: at least one preset is required.');
+      return;
+    }
+    this.plugin.settings.llmPresets = this.plugin.settings.llmPresets.filter((preset) => preset.id !== presetId);
+    this.presetDrafts.delete(presetId);
+    this.presetSecretStates.delete(presetId);
+    await this.plugin.deleteOpenAISecret(presetId);
+    await this.plugin.saveSettings();
+    this.display();
+  }
 
-		new Setting(container)
-			.setName('Image detail')
-			.setDesc('Choose how much detail to request.')
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption('low', 'Low')
-					.addOption('high', 'High')
-					.setValue(this.draft.local.imageDetail)
-					.onChange((value) => (this.draft.local.imageDetail = value as 'low' | 'high')));
+  private async saveSourceDraft(sourceId: string) {
+    const draft = this.sourceDrafts.get(sourceId);
+    if (!draft) {
+      this.collapseSource(sourceId);
+      return;
+    }
+    const index = this.plugin.settings.sources.findIndex((entry) => entry.id === sourceId);
+    if (index >= 0) {
+      this.plugin.settings.sources[index] = this.cloneSource(draft);
+    }
+    this.sourceDrafts.delete(sourceId);
+    await this.plugin.saveSettings();
+    this.collapseSource(sourceId);
+  }
 
-		this.renderPromptTextarea(container, this.draft.local.promptTemplate, (value) => {
-			this.draft.local.promptTemplate = value;
-		});
-	}
+  private cancelSourceDraft(sourceId: string) {
+    this.sourceDrafts.delete(sourceId);
+    this.collapseSource(sourceId);
+  }
 
-	private renderPromptTextarea(container: HTMLElement, value: string, onChange: (value: string) => void) {
-		const setting = new Setting(container)
-			.setName('Prompt template')
-			.setDesc('Prepended to the LLM request. Keep it concise to reduce latency.');
-		setting.settingEl.addClass('ink2md-prompt-setting');
-		setting.controlEl.empty();
-		setting.controlEl.addClass('ink2md-prompt-control');
-		const textArea = setting.controlEl.createEl('textarea', {
-			cls: 'ink2md-prompt-input',
-			text: value,
-		});
-		textArea.rows = 10;
-		textArea.addEventListener('input', () => onChange(textArea.value));
-	}
+  private async savePresetDraft(presetId: string) {
+    const draft = this.presetDrafts.get(presetId);
+    if (!draft) {
+      this.collapsePreset(presetId);
+      return;
+    }
+    const index = this.plugin.settings.llmPresets.findIndex((entry) => entry.id === presetId);
+    if (index >= 0) {
+      const secretState = this.getPresetSecretState(presetId);
+      const clone = this.clonePreset(draft);
+      const supportsSecretStorage = this.plugin.supportsSecretStorage();
+      if (clone.provider === 'openai') {
+        const input = draft.openAI.apiKey?.trim() ?? '';
+        const shouldUpdateSecret = secretState.dirty && !secretState.cleared && input.length > 0;
+        const shouldClearSecret = secretState.dirty && secretState.cleared;
+        if (shouldUpdateSecret) {
+          await this.plugin.setOpenAISecret(clone.id, input);
+        } else if (shouldClearSecret) {
+          await this.plugin.setOpenAISecret(clone.id, '');
+        }
+        clone.openAI.apiKey = supportsSecretStorage ? '' : input;
+      } else {
+        await this.plugin.deleteOpenAISecret(clone.id);
+        clone.openAI.apiKey = '';
+      }
+      this.plugin.settings.llmPresets[index] = clone;
+    }
+    this.presetDrafts.delete(presetId);
+    await this.plugin.saveSettings();
+    this.collapsePreset(presetId);
+  }
 
-	private renderSliderSetting(options: {
-		containerEl: HTMLElement;
-		name: string;
-		desc: string;
-		min: number;
-		max: number;
-		step: number;
-		value: number;
-		formatValue: (value: number) => string;
-		onChange: (value: number) => void;
-	}) {
-		const setting = new Setting(options.containerEl)
-			.setName(options.name)
-			.setDesc(options.desc);
-		let valueEl: HTMLSpanElement | null = null;
-		const slider = new SliderComponent(setting.controlEl)
-			.setLimits(options.min, options.max, options.step)
-			.setDynamicTooltip()
-			.setValue(options.value)
-			.onChange((value) => {
-				options.onChange(value);
-				valueEl?.setText(options.formatValue(value));
-			});
-		valueEl = setting.controlEl.createSpan({
-			cls: 'ink2md-slider-value',
-			text: options.formatValue(options.value),
-		});
-		slider.sliderEl.insertAdjacentElement('afterend', valueEl);
-	}
-}
+  private cancelPresetDraft(presetId: string) {
+    this.presetDrafts.delete(presetId);
+    this.collapsePreset(presetId);
+  }
 
-function createId(prefix: string): string {
-	return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  private expandSource(id: string) {
+    this.expandedSources.add(id);
+    this.display();
+  }
+
+  private collapseSource(id: string) {
+    this.expandedSources.delete(id);
+    this.sourceDrafts.delete(id);
+    this.display();
+  }
+
+  private expandPreset(id: string) {
+    this.expandedPresets.add(id);
+    this.display();
+  }
+
+  private collapsePreset(id: string) {
+    this.expandedPresets.delete(id);
+    this.presetDrafts.delete(id);
+    this.presetSecretStates.delete(id);
+    this.display();
+  }
+
+  private createIconButton(
+    container: HTMLElement,
+    icon: string,
+    label: string,
+    onClick: () => void | Promise<void>,
+    isDanger = false,
+  ) {
+    const button = container.createEl('button', { cls: 'ink2md-icon-button' });
+    button.setAttr('aria-label', label);
+    button.setAttr('title', label);
+    if (isDanger) {
+      button.addClass('mod-warning');
+    }
+    const iconSpan = button.createSpan();
+    setIcon(iconSpan, icon as any);
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      Promise.resolve(onClick()).catch((error) => console.error('[ink2md] Settings action failed', error));
+    });
+    return button;
+  }
+
+  private createTextButton(
+    container: HTMLElement,
+    label: string,
+    onClick: () => void | Promise<void>,
+    disabled = false,
+  ) {
+    const button = container.createEl('button', { cls: 'ink2md-text-button', text: label });
+    button.setAttr('aria-label', label);
+    button.disabled = disabled;
+    button.addEventListener('click', (event) => {
+      if (button.disabled) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      Promise.resolve(onClick()).catch((error) => console.error('[ink2md] Settings action failed', error));
+    });
+    return button;
+  }
+
+  private renderPromptTextarea(container: HTMLElement, value: string, onChange: (value: string) => void) {
+    const setting = new Setting(container)
+      .setName('Prompt')
+      .setDesc('Prompt used for conversion. Keep it concise to reduce latency.');
+    setting.settingEl.addClass('ink2md-prompt-setting');
+    setting.controlEl.empty();
+    setting.controlEl.addClass('ink2md-prompt-control');
+    const textArea = setting.controlEl.createEl('textarea', {
+      cls: 'ink2md-prompt-input',
+      text: value,
+    });
+    textArea.rows = 8;
+    textArea.addEventListener('input', () => {
+      onChange(textArea.value);
+    });
+  }
+
+  private renderSliderSetting(options: {
+    containerEl: HTMLElement;
+    name: string;
+    desc: string;
+    min: number;
+    max: number;
+    step: number;
+    value: number;
+    formatValue: (value: number) => string;
+    onChange: (value: number) => void;
+  }) {
+    const setting = new Setting(options.containerEl)
+      .setName(options.name)
+      .setDesc(options.desc);
+
+    let valueEl: HTMLSpanElement | null = null;
+    const slider = new SliderComponent(setting.controlEl)
+      .setLimits(options.min, options.max, options.step)
+      .setDynamicTooltip()
+      .setValue(options.value)
+      .onChange((value) => {
+        options.onChange(value);
+        valueEl?.setText(options.formatValue(value));
+      });
+
+    valueEl = setting.controlEl.createSpan({
+      cls: 'ink2md-slider-value',
+      text: options.formatValue(options.value),
+    });
+    slider.sliderEl.insertAdjacentElement('afterend', valueEl);
+  }
+
+  private describeSecretStorageLines(presetId: string): string[] {
+    if (!this.plugin.supportsSecretStorage()) {
+      return ["Stored with plugin settings because Obsidian's keychain isn't available in this Obsidian build."];
+    }
+    const secretId = this.plugin.getPresetSecretId(presetId);
+    if (secretId) {
+      return ["Stored securely in Obsidian's keychain.", `ID: ${secretId}`];
+    }
+    return ["Stored securely in Obsidian's keychain."];
+  }
+
+  private async confirmAction(options: { title: string; message: string; confirmLabel: string; confirmWarning?: boolean }): Promise<boolean> {
+    return new Promise((resolve) => {
+      const modal = new (class extends Modal {
+        constructor(app: App, private readonly onConfirm: (result: boolean) => void) {
+          super(app);
+        }
+
+        onOpen() {
+          const { contentEl } = this;
+          contentEl.createEl('h3', { text: options.title });
+          contentEl.createEl('p', { text: options.message });
+          const buttonBar = contentEl.createDiv({ cls: 'ink2md-modal-buttons' });
+          buttonBar.createEl('button', { text: 'Cancel' }).addEventListener('click', () => {
+            this.close();
+            this.onConfirm(false);
+          });
+          const confirm = buttonBar.createEl('button', { text: options.confirmLabel });
+          if (options.confirmWarning) {
+            confirm.addClass('mod-warning');
+          }
+          confirm.addEventListener('click', () => {
+            this.close();
+            this.onConfirm(true);
+          });
+        }
+
+        onClose() {
+          this.contentEl.empty();
+        }
+      })(this.app, resolve);
+      modal.open();
+    });
+  }
+
+  private async confirmClearSourceCache(sourceId: string) {
+    const confirmed = await this.confirmAction({
+      title: 'Clear cache for this source?',
+      message: 'This clears the cache of already imported files. All files for this source will be reprocessed during the next import.',
+      confirmLabel: 'Clear cache',
+      confirmWarning: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+    await this.clearSourceCache(sourceId);
+    this.display();
+  }
+
+  private async confirmReset(): Promise<boolean> {
+    return this.confirmAction({
+      title: 'Clear all caches?',
+      message: 'This clears the cache of already imported files. All sources will reprocess every file during the next import.',
+      confirmLabel: 'Clear all caches',
+      confirmWarning: true,
+    });
+  }
+
+  
+
+  private createId(prefix: string) {
+    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private cloneSource(source: SourceConfig): SourceConfig {
+    return JSON.parse(JSON.stringify(source));
+  }
+
+  private clonePreset(preset: LLMPreset): LLMPreset {
+    return JSON.parse(JSON.stringify(preset));
+  }
 }
 
 class FolderSuggest extends AbstractInputSuggest<string> {
-	private folders: string[] = [];
-	private readonly inputElRef: HTMLInputElement;
+  private folders: string[] = [];
+  private readonly inputElRef: HTMLInputElement;
 
-	constructor(app: App, inputEl: HTMLInputElement) {
-		super(app, inputEl);
-		this.inputElRef = inputEl;
-		this.refresh();
-	}
+  constructor(app: App, inputEl: HTMLInputElement) {
+    super(app, inputEl);
+    this.inputElRef = inputEl;
+    this.refresh();
+  }
 
-	getSuggestions(inputStr: string): string[] {
-		const query = inputStr.trim().toLowerCase();
-		this.refresh();
-		return this.folders.filter((folder) => folder.toLowerCase().includes(query));
-	}
+  getSuggestions(inputStr: string): string[] {
+    const query = inputStr.trim().toLowerCase();
+    this.refresh();
+    return this.folders.filter((folder) => folder.toLowerCase().includes(query));
+  }
 
-	renderSuggestion(folder: string, el: HTMLElement) {
-		el.addClass('ink2md-folder-suggestion');
-		el.setText(folder || '/');
-	}
+  renderSuggestion(folder: string, el: HTMLElement) {
+    el.addClass('ink2md-folder-suggestion');
+    el.setText(folder || '/');
+  }
 
-	selectSuggestion(folder: string) {
-		this.inputElRef.value = folder;
-		this.inputElRef.dispatchEvent(new Event('input'));
-		this.close();
-	}
+  selectSuggestion(folder: string) {
+    this.inputElRef.value = folder;
+    this.inputElRef.dispatchEvent(new Event('input'));
+    this.close();
+  }
 
-	private refresh() {
-		const dedup = new Set<string>();
-		const folders = this.app.vault.getAllFolders();
-		for (const folder of folders) {
-			if (folder.path && folder.path !== '/') {
-				dedup.add(folder.path);
-			}
-		}
-		const sorted = Array.from(dedup).sort((a, b) => a.localeCompare(b));
-		this.folders = ['/', ...sorted];
-	}
+  private refresh() {
+    const dedup = new Set<string>();
+    const folders = this.app.vault.getAllFolders();
+    for (const folder of folders) {
+      if (folder.path && folder.path !== '/') {
+        dedup.add(folder.path);
+      }
+    }
+    const sorted = Array.from(dedup).sort((a, b) => a.localeCompare(b));
+    this.folders = ['/', ...sorted];
+  }
 }

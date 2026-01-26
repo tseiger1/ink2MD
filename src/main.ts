@@ -18,6 +18,8 @@ import { buildMarkdown, buildFrontMatter, buildPagesSection } from './markdown/g
 import { hashFile } from './utils/hash';
 
 const OPENAI_SECRET_ID = 'ink2md-openai-api-key';
+const OPENAI_SECRET_PREFIX = `${OPENAI_SECRET_ID}-`;
+const OPENAI_SECRET_SUFFIX_LENGTH = 10;
 
 type SourceFingerprint = {
 	hash: string;
@@ -45,6 +47,7 @@ interface ImportJob {
 	private abortController: AbortController | null = null;
 	private pendingSpinnerStop = false;
 	private openAISecrets: Record<string, string | null> = {};
+	private notifiedMissingSecretStorage = false;
 
   async onload() {
     await this.loadSettings();
@@ -641,27 +644,136 @@ interface ImportJob {
 		return storage;
 	}
 
-	private supportsSecretStorage(): boolean {
+	supportsSecretStorage(): boolean {
 		return this.getSecretStorage() !== null;
 	}
 
-	private buildSecretId(presetId: string): string {
-		return `${OPENAI_SECRET_ID}:${presetId}`;
+	private getSecretBindings(): Record<string, string> {
+		if (!this.settings.secretBindings) {
+			this.settings.secretBindings = {};
+		}
+		return this.settings.secretBindings;
+	}
+
+	private getSecretIdForPreset(presetId: string): string | null {
+		return this.getSecretBindings()[presetId] ?? null;
+	}
+
+	private generateSecretSuffix(): string {
+		const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+		let suffix = '';
+		while (suffix.length < OPENAI_SECRET_SUFFIX_LENGTH) {
+			const index = Math.floor(Math.random() * alphabet.length);
+			suffix += alphabet.charAt(index);
+		}
+		return suffix;
+	}
+
+	private generateSecretId(existing = new Set<string>()): string {
+		let attempt = '';
+		do {
+			attempt = `${OPENAI_SECRET_PREFIX}${this.generateSecretSuffix()}`;
+		} while (existing.has(attempt));
+		return attempt;
+	}
+
+	private findReusableSecretId(storage: SecretStorage): string | null {
+		if (typeof storage.listSecrets !== 'function') {
+			return null;
+		}
+		const used = new Set(Object.values(this.getSecretBindings()));
+		try {
+			const all = storage.listSecrets();
+			for (const id of all) {
+				if (typeof id !== 'string') {
+					continue;
+				}
+				if (!id.startsWith(OPENAI_SECRET_PREFIX)) {
+					continue;
+				}
+				if (!used.has(id)) {
+					return id;
+				}
+			}
+		} catch (error) {
+			console.warn('[ink2md] Unable to enumerate secret storage entries.', error);
+		}
+		return null;
+	}
+
+	private ensureSecretBinding(presetId: string, storage: SecretStorage): string {
+		const bindings = this.getSecretBindings();
+		if (bindings[presetId]) {
+			return bindings[presetId];
+		}
+		const reusable = this.findReusableSecretId(storage);
+		const existing = new Set(Object.values(bindings));
+		if (typeof storage.listSecrets === 'function') {
+			try {
+				for (const id of storage.listSecrets()) {
+					if (typeof id === 'string' && id.startsWith(OPENAI_SECRET_PREFIX)) {
+						existing.add(id);
+					}
+				}
+			} catch (error) {
+				console.warn('[ink2md] Unable to inspect secret storage entries while allocating binding.', error);
+			}
+		}
+		const assigned = reusable ?? this.generateSecretId(existing);
+		bindings[presetId] = assigned;
+		return assigned;
+	}
+
+	getPresetSecretId(presetId: string): string | null {
+		if (!this.supportsSecretStorage()) {
+			return null;
+		}
+		return this.getSecretIdForPreset(presetId);
+	}
+
+	private buildLegacySecretIds(presetId: string): string[] {
+		const colonId = `${OPENAI_SECRET_ID}:${presetId}`;
+		const sanitized = presetId
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-+|-+$/g, '');
+		const hyphenId = `${OPENAI_SECRET_ID}-${sanitized}`;
+		return Array.from(new Set([colonId, hyphenId]));
 	}
 
 	private readOpenAISecretFromStore(presetId: string): string | null {
 		const storage = this.getSecretStorage();
 		if (!storage) {
-			const preset = this.settings.llmPresets.find((p) => p.id === presetId);
+			const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
 			return preset?.openAI.apiKey?.trim() || null;
 		}
-		try {
-			const secret = storage.getSecret(this.buildSecretId(presetId));
-			return secret && secret.trim().length > 0 ? secret.trim() : null;
-		} catch (error) {
-			console.warn('[ink2md] Unable to read OpenAI API key from secret storage.', error);
-			return null;
+		const binding = this.getSecretIdForPreset(presetId);
+		if (binding) {
+			try {
+				const secret = storage.getSecret(binding);
+				const trimmed = typeof secret === 'string' ? secret.trim() : '';
+				if (trimmed.length > 0) {
+					return trimmed;
+				}
+			} catch (error) {
+				console.warn('[ink2md] Unable to read OpenAI API key from secret storage.', error);
+			}
 		}
+		const legacyIds = this.buildLegacySecretIds(presetId);
+		for (const candidate of legacyIds) {
+			try {
+				const secret = storage.getSecret(candidate);
+				const trimmed = typeof secret === 'string' ? secret.trim() : '';
+				if (trimmed.length > 0) {
+					const target = binding ?? this.ensureSecretBinding(presetId, storage);
+					storage.setSecret(target, trimmed);
+					return trimmed;
+				}
+			} catch (error) {
+				console.warn('[ink2md] Unable to read OpenAI API key from legacy secret storage entry.', error);
+			}
+		}
+		return null;
 	}
 
 	getOpenAISecret(presetId: string): string {
@@ -674,23 +786,55 @@ interface ImportJob {
 		return secret ?? '';
 	}
 
+	hasOpenAISecret(presetId: string): boolean {
+		return this.getOpenAISecret(presetId).length > 0;
+	}
+
 	async setOpenAISecret(presetId: string, value: string) {
 		const trimmed = value.trim();
 		this.openAISecrets[presetId] = trimmed.length > 0 ? trimmed : null;
 		const storage = this.getSecretStorage();
-		if (storage) {
-			try {
-				storage.setSecret(this.buildSecretId(presetId), this.openAISecrets[presetId] ?? '');
-			} catch (error) {
-				console.error('[ink2md] Unable to persist OpenAI API key in secret storage.', error);
+		if (!storage) {
+			const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+			if (preset) {
+				preset.openAI.apiKey = trimmed;
+			}
+			if (trimmed.length === 0 && preset) {
+				preset.openAI.apiKey = '';
+			}
+			if (!this.notifiedMissingSecretStorage) {
+				this.notifiedMissingSecretStorage = true;
+				new Notice('Ink2MD: this Obsidian version does not support the secure key vault. Keys are stored with plugin settings instead.');
 			}
 			return;
 		}
-		const preset = this.settings.llmPresets.find((p) => p.id === presetId);
-		if (preset) {
-			preset.openAI.apiKey = this.openAISecrets[presetId] ?? '';
+		try {
+			const binding = this.ensureSecretBinding(presetId, storage);
+			storage.setSecret(binding, this.openAISecrets[presetId] ?? '');
+		} catch (error) {
+			console.error('[ink2md] Unable to persist OpenAI API key in secret storage.', error);
 		}
-		await this.saveSettings();
+	}
+
+	async deleteOpenAISecret(presetId: string) {
+		delete this.openAISecrets[presetId];
+		const bindings = this.getSecretBindings();
+		const binding = bindings[presetId];
+		const storage = this.getSecretStorage();
+		if (binding) {
+			delete bindings[presetId];
+			if (storage) {
+				try {
+					storage.setSecret(binding, '');
+				} catch (error) {
+					console.error('[ink2md] Unable to clear OpenAI API key from secret storage.', error);
+				}
+			}
+		}
+		const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+		if (preset) {
+			preset.openAI.apiKey = '';
+		}
 	}
 
 	async loadSettings() {
@@ -706,14 +850,8 @@ interface ImportJob {
 	}
 
 	async saveSettings() {
-		if (this.supportsSecretStorage()) {
-			for (const preset of this.settings.llmPresets) {
-				preset.openAI.apiKey = '';
-			}
-		} else {
-			for (const preset of this.settings.llmPresets) {
-				preset.openAI.apiKey = this.openAISecrets[preset.id] ?? '';
-			}
+		for (const preset of this.settings.llmPresets) {
+			preset.openAI.apiKey = '';
 		}
 		await this.saveData(this.settings);
 	}
@@ -751,11 +889,24 @@ interface ImportJob {
 				openAIKeys[preset.id] = preset.openAI.apiKey;
 			}
 		}
+		const rawBindings = (raw as Ink2MDSettings)?.secretBindings ?? {};
+		const secretBindings: Record<string, string> = {};
+		if (rawBindings && typeof rawBindings === 'object') {
+			for (const [presetId, secretId] of Object.entries(rawBindings)) {
+				if (!presetIds.has(presetId)) {
+					continue;
+				}
+				if (typeof secretId === 'string' && secretId.startsWith(OPENAI_SECRET_PREFIX)) {
+					secretBindings[presetId] = secretId;
+				}
+			}
+		}
 		return {
 			settings: {
 				sources,
 				llmPresets: presets,
 				processedSources,
+				secretBindings,
 			},
 			openAIKeys,
 		};
@@ -823,6 +974,7 @@ interface ImportJob {
 				sources: [source],
 				llmPresets: [preset],
 				processedSources,
+				secretBindings: {},
 			},
 			openAIKeys,
 		};
@@ -887,26 +1039,32 @@ interface ImportJob {
 	private initializeOpenAISecrets(initialKeys: Record<string, string>) {
 		this.openAISecrets = {};
 		const storage = this.getSecretStorage();
-		if (storage) {
-			for (const preset of this.settings.llmPresets) {
-				const initial = initialKeys[preset.id];
-				if (initial) {
-					try {
-						storage.setSecret(this.buildSecretId(preset.id), initial);
-					} catch (error) {
-						console.error('[ink2md] Unable to migrate OpenAI API key into secret storage.', error);
-					}
-				}
-				const resolved = this.readOpenAISecretFromStore(preset.id);
-				this.openAISecrets[preset.id] = resolved;
-				preset.openAI.apiKey = '';
+		if (!storage) {
+			if (Object.keys(initialKeys).length) {
+				console.warn('[ink2md] Secret storage unavailable; unable to migrate stored OpenAI API keys.');
+				new Notice('Ink2MD: secure key storage is unavailable. Update Obsidian to keep your OpenAI API keys saved.');
 			}
-		} else {
+			this.settings.secretBindings = {};
 			for (const preset of this.settings.llmPresets) {
-				const initial = initialKeys[preset.id] ?? '';
-				this.openAISecrets[preset.id] = initial;
+				const initial = initialKeys[preset.id]?.trim() || '';
+				this.openAISecrets[preset.id] = initial || null;
 				preset.openAI.apiKey = initial;
 			}
+			return;
+		}
+		for (const preset of this.settings.llmPresets) {
+			const initial = initialKeys[preset.id]?.trim();
+			if (initial) {
+				try {
+					const binding = this.ensureSecretBinding(preset.id, storage);
+					storage.setSecret(binding, initial);
+				} catch (error) {
+					console.error('[ink2md] Unable to migrate OpenAI API key into secret storage.', error);
+				}
+			}
+			const resolved = this.readOpenAISecretFromStore(preset.id);
+			this.openAISecrets[preset.id] = resolved;
+			preset.openAI.apiKey = '';
 		}
 	}
 
