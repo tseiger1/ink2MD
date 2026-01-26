@@ -21,9 +21,11 @@ Open **Settings → Community plugins → Ink2MD** and adjust:
 - Formats: toggle image, PDF, and e-ink discovery modules.
 - Conversion: pick separate PNG width caps for files stored in the vault and for the LLM payloads (set a slider to 0 to keep originals) plus a dedicated DPI value for PDF rasterization.
 - Replacement: enable “Replace existing notes” to overwrite previous imports instead of creating timestamped folders, and reset the processed-file cache when you want to force a re-import.
+- Open generated notes: optionally focus each Markdown file as it is written—useful to watch streaming output.
 - LLM provider:
   - **OpenAI**: add your API key, preferred vision-capable model, and prompt template.
-  - **Local**: specify the endpoint URL (must speak the OpenAI Chat Completions protocol), optional API key, model name, and prompt.
+  - **Local**: specify the endpoint URL (must speak the OpenAI Chat Completions protocol), optional API key, model name, and prompt. Ollama works well out of the box when exposing its OpenAI-compatible server with the `mistral-small:3.1` model.
+- Generation mode: pick **Batch** (default, writes once per note) or **Streaming** to write Markdown tokens directly into the file while the LLM responds.
 
 ## Usage
 1. Populate the input directory list with folders that contain your handwritten exports.
@@ -34,7 +36,6 @@ Open **Settings → Community plugins → Ink2MD** and adjust:
 ## Notes & limitations
 - PDF conversion relies on `pdfjs-dist` rendered inside a hidden DOM canvas. Large notebooks can take a few seconds per page.
 - `src/pdfWorkerSource.ts` embeds the upstream worker script; regenerate it after upgrading `pdfjs-dist`.
-- The e-ink module is a stub; files are detected but skipped until a proper decoder lands.
 - OpenAI calls require an active internet connection. Local providers must accept OpenAI-compatible payloads with `image_url` entries that contain `data:` URLs.
 - The plugin targets desktop Obsidian because it accesses the local file system.
 - Already-processed files are skipped automatically by comparing file hashes and timestamps, so only new or modified exports are converted.

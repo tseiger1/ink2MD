@@ -1,6 +1,6 @@
  import OpenAI from 'openai';
 import type { ChatCompletionContentPart } from 'openai/resources/chat/completions';
-import { ConvertedNote, OpenAIProviderSettings } from '../types';
+import { ConvertedNote, MarkdownStreamHandler, OpenAIProviderSettings } from '../types';
 import { scalePngBufferToDataUrl } from '../utils/pngScaler';
 
 const SYSTEM_PROMPT = 'You turn images of handwriting into clean Markdown notes with headings, bullet lists, tasks, and tables when needed. Preserve the original meaning and avoid hallucinations.';
@@ -41,8 +41,38 @@ export class OpenAIVisionProvider {
     if (!text) {
       throw new Error('OpenAI did not return any content.');
     }
-    return text;
-  }
+		return text;
+	}
+
+	async streamMarkdown(
+		note: ConvertedNote,
+		llmMaxWidth: number,
+		handler: MarkdownStreamHandler,
+		signal?: AbortSignal,
+	): Promise<void> {
+		const messages = await buildVisionMessage(
+			note,
+			this.config.promptTemplate,
+			llmMaxWidth,
+			this.config.imageDetail,
+		);
+		const stream = await this.client.chat.completions.create(
+			{
+				model: this.config.model,
+				temperature: 0.2,
+				stream: true,
+				messages: [
+					{ role: 'system', content: SYSTEM_PROMPT },
+					{ role: 'user', content: messages },
+				],
+			},
+			{ signal },
+		);
+
+		for await (const chunk of stream) {
+			await emitStreamContent(chunk.choices[0]?.delta?.content, handler);
+		}
+	}
 }
 
 async function buildVisionMessage(
@@ -66,5 +96,26 @@ async function buildVisionMessage(
 		});
 	}
 
-  return parts;
+	return parts;
+}
+
+async function emitStreamContent(
+	content: ChatCompletionContentPart[] | string | null | undefined,
+	handler: MarkdownStreamHandler,
+) {
+	if (!content) {
+		return;
+	}
+	const parts = Array.isArray(content) ? content : [content];
+	for (const part of parts) {
+		if (typeof part === 'string') {
+			if (part) {
+				await handler(part);
+			}
+			continue;
+		}
+		if (part.type === 'text' && part.text) {
+			await handler(part.text);
+		}
+	}
 }

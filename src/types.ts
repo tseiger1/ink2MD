@@ -22,6 +22,11 @@ export interface ConvertedNote {
   pages: ConvertedPage[];
 }
 
+export interface ImageEmbed {
+	path: string;
+	width: number;
+}
+
 export interface OpenAIProviderSettings {
   apiKey: string;
   model: string;
@@ -46,6 +51,7 @@ export interface ProcessedSourceInfo {
 }
 
 export type LLMProvider = 'openai' | 'local';
+export type LLMGenerationMode = 'batch' | 'stream';
 
 export interface Ink2MDSettings {
   inputDirectories: string[];
@@ -58,6 +64,8 @@ export interface Ink2MDSettings {
   replaceExisting: boolean;
   outputFolder: string;
   llmProvider: LLMProvider;
+  llmGenerationMode: LLMGenerationMode;
+  openGeneratedNotes: boolean;
   openAI: OpenAIProviderSettings;
   local: LocalProviderSettings;
   processedSources: Record<string, ProcessedSourceInfo>;
@@ -66,5 +74,7 @@ export interface Ink2MDSettings {
 export interface MarkdownGenerationContext {
   note: ConvertedNote;
   llmMarkdown: string;
-  imageEmbeds: Array<{ path: string; width: number }>;
+  imageEmbeds: ImageEmbed[];
 }
+
+export type MarkdownStreamHandler = (chunk: string) => void | Promise<void>;

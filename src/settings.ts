@@ -1,6 +1,6 @@
 import { AbstractInputSuggest, App, Modal, Notice, PluginSettingTab, Setting, SliderComponent } from 'obsidian';
 import Ink2MDPlugin from './main';
-import { Ink2MDSettings, LLMProvider } from './types';
+import { Ink2MDSettings, LLMGenerationMode, LLMProvider } from './types';
 
 const DEFAULT_PROMPT = `Convert handwritten notes to markdown. Treat all supplied pages as one note.
 
@@ -27,6 +27,8 @@ export const DEFAULT_SETTINGS: Ink2MDSettings = {
   replaceExisting: false,
   outputFolder: 'Ink2MD',
   llmProvider: 'openai',
+  llmGenerationMode: 'batch',
+  openGeneratedNotes: false,
   openAI: {
     apiKey: '',
     model: 'gpt-4o-mini',
@@ -225,6 +227,18 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('Open generated notes during import')
+      .setDesc('Automatically focus the Markdown file that is currently being written (useful for streaming mode).')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.openGeneratedNotes)
+          .onChange(async (value) => {
+            this.plugin.settings.openGeneratedNotes = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName('Processed files cache')
       .setDesc('Reset the list of already-processed sources if files were removed externally.')
       .addButton((button) =>
@@ -255,6 +269,21 @@ export class Ink2MDSettingTab extends PluginSettingTab {
             this.plugin.settings.llmProvider = value as LLMProvider;
             await this.plugin.saveSettings();
             this.display();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Generation mode')
+      .setDesc('Batch waits for the full response, streaming writes Markdown tokens directly to the output file.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('batch', 'Batch')
+          .addOption('stream', 'Streaming')
+          .setValue(this.plugin.settings.llmGenerationMode)
+          .onChange(async (value) => {
+            const mode: LLMGenerationMode = value === 'stream' ? 'stream' : 'batch';
+            this.plugin.settings.llmGenerationMode = mode;
+            await this.plugin.saveSettings();
           }),
       );
 

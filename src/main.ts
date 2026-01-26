@@ -1,12 +1,18 @@
 import { promises as fs } from 'fs';
-import { Notice, Plugin, normalizePath, setIcon, setTooltip } from 'obsidian';
+import { Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from 'obsidian';
 import type { SecretStorage } from 'obsidian';
 import { DEFAULT_SETTINGS, Ink2MDSettingTab } from './settings';
-import type { Ink2MDSettings, ConvertedNote, NoteSource, ProcessedSourceInfo } from './types';
+import type {
+	Ink2MDSettings,
+	ConvertedNote,
+	NoteSource,
+	ProcessedSourceInfo,
+	ImageEmbed,
+} from './types';
 import { discoverNoteSources } from './importers';
 import { convertSourceToPng } from './conversion';
 import { LLMService } from './llm';
-import { buildMarkdown } from './markdown/generator';
+import { buildMarkdown, buildFrontMatter, buildPagesSection } from './markdown/generator';
 import { hashFile } from './utils/hash';
 
 const OPENAI_SECRET_ID = 'ink2md-openai-api-key';
@@ -95,6 +101,7 @@ interface FreshnessResult {
 			return;
 		}
 
+		const shouldStream = this.settings.llmGenerationMode === 'stream';
 		let processed = 0;
 		let cancelled = false;
 		for (const source of sources) {
@@ -127,25 +134,55 @@ interface FreshnessResult {
 			}
 
 		this.setStatus(`Reading handwriting ${processed + 1}/${sources.length}`);
-		let llmMarkdown = '';
-		try {
-			llmMarkdown = await llm.generateMarkdown(converted, this.abortController?.signal);
-		} catch (error) {
-			if (this.cancelRequested && this.abortController?.signal?.aborted) {
+		let streamFailed = false;
+		if (shouldStream) {
+			try {
+				await this.streamMarkdownContent(converted, folderPath, llm, this.abortController?.signal);
+			} catch (error) {
+				if (this.cancelRequested && this.abortController?.signal?.aborted) {
+					cancelled = true;
+					break;
+				}
+				console.error('[ink2md] Failed to stream markdown', error);
+				streamFailed = true;
+			}
+		} else {
+			let llmMarkdown = '';
+			try {
+				llmMarkdown = await llm.generateMarkdown(converted, this.abortController?.signal);
+			} catch (error) {
+				if (this.cancelRequested && this.abortController?.signal?.aborted) {
+					cancelled = true;
+					break;
+				}
+				console.error('[ink2md] Failed to generate markdown', error);
+				llmMarkdown = '_LLM generation failed._';
+			}
+
+			if (this.cancelRequested) {
 				cancelled = true;
 				break;
 			}
-			console.error('[ink2md] Failed to generate markdown', error);
-			llmMarkdown = '_LLM generation failed._';
+
+			this.setStatus(`Writing note ${processed + 1}/${sources.length}`);
+			await this.persistNote(converted, llmMarkdown, folderPath);
+			await this.rememberProcessedSource(source, freshness.fingerprint, folderPath);
+			processed += 1;
+			continue;
 		}
 
-        if (this.cancelRequested) {
-          cancelled = true;
-          break;
-        }
+			if (this.cancelRequested) {
+				cancelled = true;
+				break;
+			}
 
 		this.setStatus(`Writing note ${processed + 1}/${sources.length}`);
-			await this.persistNote(converted, llmMarkdown, folderPath);
+			const imageEmbeds = await this.writeAttachments(converted, folderPath);
+			if (streamFailed) {
+				await this.writeMarkdownFile(converted, folderPath, '_LLM generation failed._', imageEmbeds);
+			} else {
+				await this.appendPagesSection(converted, folderPath, imageEmbeds);
+			}
 			await this.rememberProcessedSource(source, freshness.fingerprint, folderPath);
 			processed += 1;
 		}
@@ -165,29 +202,84 @@ interface FreshnessResult {
   }
 
 	private async persistNote(note: ConvertedNote, llmMarkdown: string, targetFolder?: string) {
-		const adapter = this.app.vault.adapter;
 		const folderPath = targetFolder ?? (await this.ensureNoteFolder(note.source));
-		const imageEmbeds: Array<{ path: string; width: number }> = [];
+		const imageEmbeds = await this.writeAttachments(note, folderPath);
+		await this.writeMarkdownFile(note, folderPath, llmMarkdown, imageEmbeds);
+	}
 
-    for (const page of note.pages) {
-      const imagePath = normalizePath(`${folderPath}/${page.fileName}`);
-      imageEmbeds.push({ path: `./${page.fileName}`, width: page.width });
-      await adapter.writeBinary(imagePath, bufferToArrayBuffer(page.data));
-    }
+	private async streamMarkdownContent(
+		note: ConvertedNote,
+		folderPath: string,
+		llm: LLMService,
+		signal?: AbortSignal,
+	) {
+		const adapter = this.app.vault.adapter;
+		const markdownPath = this.getMarkdownPath(note, folderPath);
+		if (await adapter.exists(markdownPath)) {
+			await adapter.remove(markdownPath);
+		}
+		await adapter.write(markdownPath, `${buildFrontMatter(note)}\n\n`);
+		await this.maybeOpenGeneratedNote(note, folderPath);
+		await llm.streamMarkdown(
+			note,
+			async (chunk) => {
+				if (!chunk) {
+					return;
+				}
+				await adapter.append(markdownPath, chunk);
+			},
+			signal,
+		);
+	}
 
-    const markdownPath = normalizePath(`${folderPath}/${note.source.basename}.md`);
-    const markdown = buildMarkdown({
-      note,
-      llmMarkdown,
-      imageEmbeds,
-    });
+	private async appendPagesSection(note: ConvertedNote, folderPath: string, imageEmbeds: ImageEmbed[]) {
+		const adapter = this.app.vault.adapter;
+		const markdownPath = this.getMarkdownPath(note, folderPath);
+		await adapter.append(markdownPath, `\n\n${buildPagesSection(imageEmbeds)}`);
+	}
 
-    if (await adapter.exists(markdownPath)) {
-      await adapter.remove(markdownPath);
-    }
+	private async writeMarkdownFile(
+		note: ConvertedNote,
+		folderPath: string,
+		llmMarkdown: string,
+		imageEmbeds: ImageEmbed[],
+	) {
+		const adapter = this.app.vault.adapter;
+		const markdownPath = this.getMarkdownPath(note, folderPath);
+		const markdown = buildMarkdown({ note, llmMarkdown, imageEmbeds });
+		if (await adapter.exists(markdownPath)) {
+			await adapter.remove(markdownPath);
+		}
+		await adapter.write(markdownPath, markdown);
+		await this.maybeOpenGeneratedNote(note, folderPath);
+	}
 
-    await adapter.write(markdownPath, markdown);
-  }
+	private async writeAttachments(note: ConvertedNote, folderPath: string): Promise<ImageEmbed[]> {
+		const adapter = this.app.vault.adapter;
+		const imageEmbeds: ImageEmbed[] = [];
+		for (const page of note.pages) {
+			const imagePath = normalizePath(`${folderPath}/${page.fileName}`);
+			imageEmbeds.push({ path: `./${page.fileName}`, width: page.width });
+			await adapter.writeBinary(imagePath, bufferToArrayBuffer(page.data));
+		}
+		return imageEmbeds;
+	}
+
+	private getMarkdownPath(note: ConvertedNote, folderPath: string): string {
+		return normalizePath(`${folderPath}/${note.source.basename}.md`);
+	}
+
+	private async maybeOpenGeneratedNote(note: ConvertedNote, folderPath: string) {
+		if (!this.settings.openGeneratedNotes) {
+			return;
+		}
+		const file = this.app.vault.getAbstractFileByPath(this.getMarkdownPath(note, folderPath));
+		if (!(file instanceof TFile)) {
+			return;
+		}
+		const leaf = this.app.workspace.getLeaf(true);
+		await leaf.openFile(file);
+	}
 
 	private setStatus(message: string) {
 		if (this.statusIconEl) {
