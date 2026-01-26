@@ -37,6 +37,15 @@ export interface OpenAIProviderSettings {
 	imageDetail: 'low' | 'high';
 }
 
+export interface AzureOpenAIProviderSettings {
+	apiKey: string;
+	endpoint: string;
+	deployment: string;
+	apiVersion: string;
+	promptTemplate: string;
+	imageDetail: 'low' | 'high';
+}
+
 export interface LocalProviderSettings {
 	endpoint: string;
 	apiKey: string;
@@ -51,7 +60,7 @@ export interface GeminiProviderSettings {
 	promptTemplate: string;
 }
 
-export type LLMProvider = 'openai' | 'local' | 'gemini';
+export type LLMProvider = 'openai' | 'azure-openai' | 'local' | 'gemini';
 export type LLMGenerationMode = 'batch' | 'stream';
 
 export interface LLMPreset {
@@ -61,6 +70,7 @@ export interface LLMPreset {
 	generationMode: LLMGenerationMode;
 	llmMaxWidth: number;
 	openAI: OpenAIProviderSettings;
+	azureOpenAI: AzureOpenAIProviderSettings;
 	local: LocalProviderSettings;
 	gemini: GeminiProviderSettings;
 }

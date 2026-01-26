@@ -25,17 +25,20 @@ import { isImageFile } from './importers/imageImporter';
 import { isPdfFile } from './importers/pdfImporter';
 import { Ink2MDDropView, VIEW_TYPE_INK2MD_DROP } from './ui/dropView';
 
-type SecretProvider = 'openai' | 'gemini';
+type SecretProvider = 'openai' | 'azure-openai' | 'gemini';
 
 const OPENAI_SECRET_ID = 'ink2md-openai-api-key';
+const AZURE_OPENAI_SECRET_ID = 'ink2md-azure-openai-api-key';
 const GEMINI_SECRET_ID = 'ink2md-gemini-api-key';
 const SECRET_SUFFIX_LENGTH = 10;
 const PROVIDER_SECRET_PREFIX: Record<SecretProvider, string> = {
 	openai: `${OPENAI_SECRET_ID}-`,
+	'azure-openai': `${AZURE_OPENAI_SECRET_ID}-`,
 	gemini: `${GEMINI_SECRET_ID}-`,
 };
 const PROVIDER_SECRET_ID: Record<SecretProvider, string> = {
 	openai: OPENAI_SECRET_ID,
+	'azure-openai': AZURE_OPENAI_SECRET_ID,
 	gemini: GEMINI_SECRET_ID,
 };
 
@@ -70,6 +73,7 @@ interface ImportRunOptions {
 	private abortController: AbortController | null = null;
 	private pendingSpinnerStop = false;
 	private openAISecrets: Record<string, string | null> = {};
+	private azureOpenAISecrets: Record<string, string | null> = {};
 	private geminiSecrets: Record<string, string | null> = {};
 	private notifiedMissingSecretStorage = false;
 	private stagedFiles = new Set<string>();
@@ -317,6 +321,16 @@ interface ImportRunOptions {
 			new Notice(`Ink2MD: preset "${preset.label}" requires an OpenAI API key.`);
 			return null;
 		}
+		if (preset.provider === 'azure-openai') {
+			if (!preset.azureOpenAI.apiKey) {
+				new Notice(`Ink2MD: preset "${preset.label}" requires an Azure OpenAI API key.`);
+				return null;
+			}
+			if (!preset.azureOpenAI.endpoint || !preset.azureOpenAI.deployment) {
+				new Notice(`Ink2MD: preset "${preset.label}" is missing the Azure endpoint or model name.`);
+				return null;
+			}
+		}
 		if (preset.provider === 'gemini' && !preset.gemini.apiKey) {
 			new Notice(`Ink2MD: preset "${preset.label}" requires a Gemini API key.`);
 			return null;
@@ -486,12 +500,17 @@ interface ImportRunOptions {
 			return null;
 		}
 		const resolvedOpenAIKey = this.getOpenAISecret(preset.id) || preset.openAI.apiKey;
+		const resolvedAzureKey = this.getAzureOpenAISecret(preset.id) || preset.azureOpenAI.apiKey;
 		const resolvedGeminiKey = this.getGeminiSecret(preset.id) || preset.gemini.apiKey;
 		return {
 			...preset,
 			openAI: {
 				...preset.openAI,
 				apiKey: resolvedOpenAIKey ?? '',
+			},
+			azureOpenAI: {
+				...preset.azureOpenAI,
+				apiKey: resolvedAzureKey ?? '',
 			},
 			local: {
 				...preset.local,
@@ -1094,6 +1113,27 @@ interface ImportRunOptions {
 		return null;
 	}
 
+	private readAzureOpenAISecretFromStore(presetId: string): string | null {
+		const storage = this.getSecretStorage();
+		if (!storage) {
+			const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+			return preset?.azureOpenAI.apiKey?.trim() || null;
+		}
+		const binding = this.getSecretIdForPreset(presetId, 'azure-openai');
+		if (binding) {
+			try {
+				const secret = storage.getSecret(binding);
+				const trimmed = typeof secret === 'string' ? secret.trim() : '';
+				if (trimmed.length > 0) {
+					return trimmed;
+				}
+			} catch (error) {
+				console.warn('[ink2md] Unable to read Azure OpenAI API key from secret storage.', error);
+			}
+		}
+		return null;
+	}
+
 	private readGeminiSecretFromStore(presetId: string): string | null {
 		const storage = this.getSecretStorage();
 		if (!storage) {
@@ -1180,6 +1220,71 @@ interface ImportRunOptions {
 		}
 	}
 
+	getAzureOpenAISecret(presetId: string): string {
+		const cached = this.azureOpenAISecrets[presetId];
+		if (cached && cached.length > 0) {
+			return cached;
+		}
+		const secret = this.readAzureOpenAISecretFromStore(presetId);
+		this.azureOpenAISecrets[presetId] = secret;
+		return secret ?? '';
+	}
+
+	hasAzureOpenAISecret(presetId: string): boolean {
+		return this.getAzureOpenAISecret(presetId).length > 0;
+	}
+
+	async setAzureOpenAISecret(presetId: string, value: string) {
+		const trimmed = value.trim();
+		this.azureOpenAISecrets[presetId] = trimmed.length > 0 ? trimmed : null;
+		const storage = this.getSecretStorage();
+		if (!storage) {
+			const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+			if (preset) {
+				preset.azureOpenAI.apiKey = trimmed;
+			}
+			if (trimmed.length === 0 && preset) {
+				preset.azureOpenAI.apiKey = '';
+			}
+			if (!this.notifiedMissingSecretStorage) {
+				this.notifiedMissingSecretStorage = true;
+				new Notice('Ink2MD: this Obsidian version does not support the secure key vault. Keys are stored with plugin settings instead.');
+			}
+			return;
+		}
+		try {
+			const binding = this.ensureSecretBinding(presetId, 'azure-openai', storage);
+			storage.setSecret(binding, this.azureOpenAISecrets[presetId] ?? '');
+		} catch (error) {
+			console.error('[ink2md] Unable to persist Azure OpenAI API key in secret storage.', error);
+		}
+	}
+
+	async deleteAzureOpenAISecret(presetId: string) {
+		delete this.azureOpenAISecrets[presetId];
+		const bindings = this.getSecretBindings();
+		const entry = bindings[presetId];
+		const binding = entry?.['azure-openai'];
+		const storage = this.getSecretStorage();
+		if (binding) {
+			delete entry!['azure-openai'];
+			if (Object.keys(entry!).length === 0) {
+				delete bindings[presetId];
+			}
+			if (storage) {
+				try {
+					storage.setSecret(binding, '');
+				} catch (error) {
+					console.error('[ink2md] Unable to clear Azure OpenAI API key from secret storage.', error);
+				}
+			}
+		}
+		const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+		if (preset) {
+			preset.azureOpenAI.apiKey = '';
+		}
+	}
+
 	getGeminiSecret(presetId: string): string {
 		const cached = this.geminiSecrets[presetId];
 		if (cached && cached.length > 0) {
@@ -1247,7 +1352,12 @@ interface ImportRunOptions {
 
 	async loadSettings() {
 		const stored = (await this.loadData()) as Partial<Ink2MDSettings> | null;
-		let normalized: { settings: Ink2MDSettings; openAIKeys: Record<string, string>; geminiKeys: Record<string, string> };
+		let normalized: {
+			settings: Ink2MDSettings;
+			openAIKeys: Record<string, string>;
+			azureOpenAIKeys: Record<string, string>;
+			geminiKeys: Record<string, string>;
+		};
 		if (!stored || !Array.isArray((stored as Ink2MDSettings).sources) || !Array.isArray((stored as Ink2MDSettings).llmPresets)) {
 			normalized = this.migrateLegacySettings(stored ?? {});
 		} else {
@@ -1255,12 +1365,14 @@ interface ImportRunOptions {
 		}
 		this.settings = normalized.settings;
 		this.initializeOpenAISecrets(normalized.openAIKeys);
+		this.initializeAzureOpenAISecrets(normalized.azureOpenAIKeys);
 		this.initializeGeminiSecrets(normalized.geminiKeys);
 	}
 
 	async saveSettings() {
 		for (const preset of this.settings.llmPresets) {
 			preset.openAI.apiKey = '';
+			preset.azureOpenAI.apiKey = '';
 			preset.gemini.apiKey = '';
 		}
 		await this.saveData(this.settings);
@@ -1279,7 +1391,12 @@ interface ImportRunOptions {
 
 	private normalizeSettings(
 		raw: Partial<Ink2MDSettings>,
-	): { settings: Ink2MDSettings; openAIKeys: Record<string, string>; geminiKeys: Record<string, string> } {
+	): {
+		settings: Ink2MDSettings;
+		openAIKeys: Record<string, string>;
+		azureOpenAIKeys: Record<string, string>;
+		geminiKeys: Record<string, string>;
+	} {
 		const defaultPresetTemplate = DEFAULT_SETTINGS.llmPresets[0]!;
 		const defaultSourceTemplate =
 			DEFAULT_SETTINGS.sources.find((source) => source.type === 'filesystem') ?? DEFAULT_SETTINGS.sources[0]!;
@@ -1325,10 +1442,14 @@ interface ImportRunOptions {
 			};
 		}
 		const openAIKeys: Record<string, string> = {};
+		const azureOpenAIKeys: Record<string, string> = {};
 		const geminiKeys: Record<string, string> = {};
 		for (const preset of presets) {
 			if (preset.openAI.apiKey) {
 				openAIKeys[preset.id] = preset.openAI.apiKey;
+			}
+			if (preset.azureOpenAI?.apiKey) {
+				azureOpenAIKeys[preset.id] = preset.azureOpenAI.apiKey;
 			}
 			if (preset.gemini?.apiKey) {
 				geminiKeys[preset.id] = preset.gemini.apiKey;
@@ -1351,7 +1472,7 @@ interface ImportRunOptions {
 					const bindingEntries = binding as Record<string, unknown>;
 					const entry: Partial<Record<SecretProvider, string>> = {};
 					for (const [providerKey, secretId] of Object.entries(bindingEntries)) {
-						if (providerKey === 'openai' || providerKey === 'gemini') {
+						if (providerKey === 'openai' || providerKey === 'azure-openai' || providerKey === 'gemini') {
 							if (typeof secretId !== 'string') {
 								continue;
 							}
@@ -1375,6 +1496,7 @@ interface ImportRunOptions {
 				secretBindings,
 			},
 			openAIKeys,
+			azureOpenAIKeys,
 			geminiKeys,
 		};
 	}
@@ -1382,11 +1504,13 @@ interface ImportRunOptions {
 	private migrateLegacySettings(raw: any): {
 		settings: Ink2MDSettings;
 		openAIKeys: Record<string, string>;
+		azureOpenAIKeys: Record<string, string>;
 		geminiKeys: Record<string, string>;
 	} {
 		const presetId = this.generateId('preset');
 		const sourceId = this.generateId('source');
 		const openAIKeys: Record<string, string> = {};
+		const azureOpenAIKeys: Record<string, string> = {};
 		const geminiKeys: Record<string, string> = {};
 		const legacyProvider = raw?.llmProvider ?? 'openai';
 		const legacyGenerationMode = raw?.llmGenerationMode ?? 'batch';
@@ -1405,6 +1529,10 @@ interface ImportRunOptions {
 				...(raw?.openAI ?? {}),
 				promptTemplate: legacyPrompt,
 			},
+			azureOpenAI: {
+				...defaultPresetTemplate.azureOpenAI,
+				...(raw?.azureOpenAI ?? {}),
+			},
 			local: {
 				...defaultPresetTemplate.local,
 				...(raw?.local ?? {}),
@@ -1416,6 +1544,9 @@ interface ImportRunOptions {
 		};
 		if (preset.openAI.apiKey) {
 			openAIKeys[preset.id] = preset.openAI.apiKey;
+		}
+		if (preset.azureOpenAI.apiKey) {
+			azureOpenAIKeys[preset.id] = preset.azureOpenAI.apiKey;
 		}
 		const source: SourceConfig = {
 			...defaultSourceTemplate,
@@ -1452,6 +1583,7 @@ interface ImportRunOptions {
 				secretBindings: {},
 			},
 			openAIKeys,
+			azureOpenAIKeys,
 			geminiKeys,
 		};
 	}
@@ -1472,6 +1604,10 @@ interface ImportRunOptions {
 			openAI: {
 				...fallback.openAI,
 				...(base.openAI ?? {}),
+			},
+			azureOpenAI: {
+				...fallback.azureOpenAI,
+				...(base.azureOpenAI ?? {}),
 			},
 			local: {
 				...fallback.local,
@@ -1548,6 +1684,36 @@ interface ImportRunOptions {
 			const resolved = this.readOpenAISecretFromStore(preset.id);
 			this.openAISecrets[preset.id] = resolved;
 			preset.openAI.apiKey = '';
+		}
+	}
+
+	private initializeAzureOpenAISecrets(initialKeys: Record<string, string>) {
+		this.azureOpenAISecrets = {};
+		const storage = this.getSecretStorage();
+		if (!storage) {
+			if (Object.keys(initialKeys).length) {
+				console.warn('[ink2md] Secret storage unavailable; unable to migrate stored Azure OpenAI API keys.');
+			}
+			for (const preset of this.settings.llmPresets) {
+				const initial = initialKeys[preset.id]?.trim() || '';
+				this.azureOpenAISecrets[preset.id] = initial || null;
+				preset.azureOpenAI.apiKey = initial;
+			}
+			return;
+		}
+		for (const preset of this.settings.llmPresets) {
+			const initial = initialKeys[preset.id]?.trim();
+			if (initial) {
+				try {
+					const binding = this.ensureSecretBinding(preset.id, 'azure-openai', storage);
+					storage.setSecret(binding, initial);
+				} catch (error) {
+					console.error('[ink2md] Unable to migrate Azure OpenAI API key into secret storage.', error);
+				}
+			}
+			const resolved = this.readAzureOpenAISecretFromStore(preset.id);
+			this.azureOpenAISecrets[preset.id] = resolved;
+			preset.azureOpenAI.apiKey = '';
 		}
 	}
 

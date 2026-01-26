@@ -1,9 +1,9 @@
- import OpenAI from 'openai';
+import OpenAI from 'openai';
 import type { ChatCompletionContentPart } from 'openai/resources/chat/completions';
 import { ConvertedNote, MarkdownStreamHandler, OpenAIProviderSettings } from '../types';
 import { scalePngBufferToDataUrl } from '../utils/pngScaler';
 
-const SYSTEM_PROMPT = 'You turn images of handwriting into clean Markdown notes with headings, bullet lists, tasks, and tables when needed. Preserve the original meaning and avoid hallucinations.';
+export const OPENAI_VISION_SYSTEM_PROMPT = 'You turn images of handwriting into clean Markdown notes with headings, bullet lists, tasks, and tables when needed. Preserve the original meaning and avoid hallucinations.';
 
 export class OpenAIVisionProvider {
   private client: OpenAI;
@@ -30,7 +30,7 @@ export class OpenAIVisionProvider {
 				model: this.config.model,
 				temperature: 0.2,
 				messages: [
-					{ role: 'system', content: SYSTEM_PROMPT },
+					{ role: 'system', content: OPENAI_VISION_SYSTEM_PROMPT },
 					{ role: 'user', content: messages },
 				],
 			},
@@ -62,7 +62,7 @@ export class OpenAIVisionProvider {
 				temperature: 0.2,
 				stream: true,
 				messages: [
-					{ role: 'system', content: SYSTEM_PROMPT },
+					{ role: 'system', content: OPENAI_VISION_SYSTEM_PROMPT },
 					{ role: 'user', content: messages },
 				],
 			},
@@ -75,7 +75,7 @@ export class OpenAIVisionProvider {
 	}
 }
 
-async function buildVisionMessage(
+export async function buildVisionMessage(
 	note: ConvertedNote,
 	promptTemplate: string,
 	llmMaxWidth: number,
@@ -96,10 +96,10 @@ async function buildVisionMessage(
 		});
 	}
 
-	return parts;
+ 	return parts;
 }
 
-async function emitStreamContent(
+export async function emitStreamContent(
 	content: ChatCompletionContentPart[] | string | null | undefined,
 	handler: MarkdownStreamHandler,
 ) {

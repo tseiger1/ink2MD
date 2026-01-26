@@ -1,5 +1,6 @@
 import { ConvertedNote, LLMPreset, MarkdownStreamHandler } from '../types';
 import { OpenAIVisionProvider } from './openaiProvider';
+import { AzureOpenAIVisionProvider } from './azureOpenAIProvider';
 import { LocalVisionProvider } from './localProvider';
 import { GeminiVisionProvider } from './geminiProvider';
 
@@ -21,6 +22,8 @@ export class LLMService {
 		this.llmMaxWidth = preset.llmMaxWidth;
 		if (preset.provider === 'openai') {
 			this.provider = new OpenAIVisionProvider(preset.openAI);
+		} else if (preset.provider === 'azure-openai') {
+			this.provider = new AzureOpenAIVisionProvider(preset.azureOpenAI);
 		} else if (preset.provider === 'gemini') {
 			this.provider = new GeminiVisionProvider(preset.gemini);
 		} else {

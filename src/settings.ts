@@ -41,6 +41,14 @@ const DEFAULT_LLM_PRESET: LLMPreset = {
     promptTemplate: DEFAULT_PROMPT,
     imageDetail: 'low',
   },
+  azureOpenAI: {
+    apiKey: '',
+    endpoint: 'https://example-resource.openai.azure.com/',
+    deployment: 'gpt-5-mini',
+    apiVersion: '2024-02-15-preview',
+    promptTemplate: DEFAULT_PROMPT,
+    imageDetail: 'low',
+  },
   local: {
     endpoint: 'http://localhost:11434/v1/chat/completions',
     apiKey: '',
@@ -484,10 +492,11 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
     new Setting(container)
       .setName('Provider')
-      .setDesc('Choose between OpenAI, Google Gemini, or a local OpenAI-compatible endpoint.')
+      .setDesc('Choose between OpenAI, Azure OpenAI, Google Gemini, or a local OpenAI-compatible endpoint.')
       .addDropdown((dropdown) =>
         dropdown
           .addOption('openai', 'OpenAI')
+          .addOption('azure-openai', 'Azure OpenAI')
           .addOption('gemini', 'Google Gemini')
           .addOption('local', 'Local')
           .setValue(draft.provider)
@@ -499,15 +508,13 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       );
 
     new Setting(container)
-      .setName('Generation mode')
-      .setDesc('Streaming writes tokens to disk live; batch waits for completion.')
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption('batch', 'Batch')
-          .addOption('stream', 'Streaming')
-          .setValue(draft.generationMode)
+      .setName('Streaming')
+      .setDesc('Enable to write LLM tokens to disk as they arrive; disable to wait for the full response before writing.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(draft.generationMode === 'stream')
           .onChange((value) => {
-            draft.generationMode = value as LLMGenerationMode;
+            draft.generationMode = value ? 'stream' : 'batch';
             summaryEl.setText(this.describePreset(draft));
           }),
       );
@@ -529,6 +536,8 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     const providerFields = container.createDiv({ cls: 'ink2md-provider-fields' });
     if (draft.provider === 'openai') {
       this.renderOpenAIFields(providerFields, draft, this.getPresetSecretState(draft.id, 'openai'));
+    } else if (draft.provider === 'azure-openai') {
+      this.renderAzureOpenAIFields(providerFields, draft, this.getPresetSecretState(draft.id, 'azure-openai'));
     } else if (draft.provider === 'gemini') {
       this.renderGeminiFields(providerFields, draft, this.getPresetSecretState(draft.id, 'gemini'));
     } else {
@@ -606,6 +615,105 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
     this.renderPromptTextarea(container, draft.openAI.promptTemplate, (value) => {
       draft.openAI.promptTemplate = value;
+    });
+  }
+
+  private renderAzureOpenAIFields(container: HTMLElement, draft: LLMPreset, secretState: PresetSecretState) {
+    const apiKeySetting = new Setting(container).setName('API key');
+    apiKeySetting.setDesc('');
+    const descEl = apiKeySetting.descEl;
+    descEl.empty();
+    descEl.createSpan({ text: 'Azure OpenAI API key for this preset.' });
+    for (const line of this.describeSecretStorageLines(draft.id, 'azure-openai')) {
+      descEl.createEl('br');
+      descEl.createSpan({ text: line });
+    }
+    apiKeySetting.addText((text) => {
+        const placeholder = '••••••••';
+        const canShowPlaceholder = secretState.hasSecret && !secretState.cleared && !secretState.dirty && !draft.azureOpenAI.apiKey;
+        let showingPlaceholder = false;
+        text.setPlaceholder('az-...');
+        if (canShowPlaceholder) {
+          text.setValue(placeholder);
+          showingPlaceholder = true;
+        } else {
+          text.setValue(draft.azureOpenAI.apiKey);
+        }
+        text.onChange((value) => {
+          if (showingPlaceholder) {
+            return;
+          }
+          const trimmed = value.trim();
+          draft.azureOpenAI.apiKey = trimmed;
+          secretState.dirty = true;
+          secretState.cleared = trimmed.length === 0;
+        });
+        text.inputEl.type = 'password';
+        text.inputEl.autocomplete = 'off';
+        text.inputEl.addEventListener('focus', () => {
+          if (showingPlaceholder) {
+            showingPlaceholder = false;
+            text.setValue('');
+          }
+        });
+        text.inputEl.addEventListener('blur', () => {
+          if (!secretState.dirty && secretState.hasSecret && !secretState.cleared && !text.inputEl.value) {
+            showingPlaceholder = true;
+            text.setValue(placeholder);
+          }
+        });
+      });
+
+    new Setting(container)
+      .setName('Endpoint')
+      .setDesc('Azure resource endpoint, e.g. https://example-resource.openai.azure.com/.')
+      .addText((text) =>
+        text
+          .setPlaceholder('https://example-resource.openai.azure.com/')
+          .setValue(draft.azureOpenAI.endpoint)
+          .onChange((value) => {
+            draft.azureOpenAI.endpoint = value.trim();
+          }),
+      );
+
+    new Setting(container)
+      .setName('Model')
+      .setDesc('Azure OpenAI deployment/model name, e.g. gpt-5-mini.')
+      .addText((text) =>
+        text
+          .setPlaceholder('gpt-5-mini')
+          .setValue(draft.azureOpenAI.deployment)
+          .onChange((value) => {
+            draft.azureOpenAI.deployment = value.trim();
+          }),
+      );
+
+    new Setting(container)
+      .setName('API version')
+      .setDesc('Defaults to the SDK version recommended for your deployment.')
+      .addText((text) =>
+        text
+          .setPlaceholder('2024-02-15-preview')
+          .setValue(draft.azureOpenAI.apiVersion)
+          .onChange((value) => {
+            draft.azureOpenAI.apiVersion = value.trim();
+          }),
+      );
+
+    new Setting(container)
+      .setName('Image detail')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('low', 'Low')
+          .addOption('high', 'High')
+          .setValue(draft.azureOpenAI.imageDetail)
+          .onChange((value) => {
+            draft.azureOpenAI.imageDetail = value === 'high' ? 'high' : 'low';
+          }),
+      );
+
+    this.renderPromptTextarea(container, draft.azureOpenAI.promptTemplate, (value) => {
+      draft.azureOpenAI.promptTemplate = value;
     });
   }
 
@@ -755,7 +863,14 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   }
 
   private describePreset(preset: LLMPreset): string {
-    const providerLabel = preset.provider === 'openai' ? 'OpenAI' : preset.provider === 'gemini' ? 'Gemini' : 'Local';
+    const providerLabel =
+      preset.provider === 'openai'
+        ? 'OpenAI'
+        : preset.provider === 'azure-openai'
+          ? 'Azure OpenAI'
+          : preset.provider === 'gemini'
+            ? 'Gemini'
+            : 'Local';
     return `Provider: ${providerLabel} • Mode: ${preset.generationMode === 'stream' ? 'Streaming' : 'Batch'}`;
   }
 
@@ -865,10 +980,14 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     return this.presetDrafts.get(id)!;
   }
 
-  private getPresetSecretState(id: string, provider: 'openai' | 'gemini'): PresetSecretState {
+  private getPresetSecretState(id: string, provider: 'openai' | 'azure-openai' | 'gemini'): PresetSecretState {
     const key = this.getSecretStateKey(id, provider);
     if (!this.presetSecretStates.has(key)) {
-      const hasSecret = provider === 'openai' ? this.plugin.hasOpenAISecret(id) : this.plugin.hasGeminiSecret(id);
+      const hasSecret = provider === 'openai'
+        ? this.plugin.hasOpenAISecret(id)
+        : provider === 'azure-openai'
+          ? this.plugin.hasAzureOpenAISecret(id)
+          : this.plugin.hasGeminiSecret(id);
       this.presetSecretStates.set(key, {
         hasSecret,
         dirty: false,
@@ -878,12 +997,12 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     return this.presetSecretStates.get(key)!;
   }
 
-  private getSecretStateKey(id: string, provider: 'openai' | 'gemini'): string {
+  private getSecretStateKey(id: string, provider: 'openai' | 'azure-openai' | 'gemini'): string {
     return `${id}:${provider}`;
   }
 
   private clearPresetSecretStates(id: string) {
-    for (const provider of ['openai', 'gemini'] as const) {
+    for (const provider of ['openai', 'azure-openai', 'gemini'] as const) {
       this.presetSecretStates.delete(this.getSecretStateKey(id, provider));
     }
   }
@@ -964,6 +1083,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     this.presetDrafts.delete(presetId);
     this.clearPresetSecretStates(presetId);
     await this.plugin.deleteOpenAISecret(presetId);
+    await this.plugin.deleteAzureOpenAISecret(presetId);
     await this.plugin.deleteGeminiSecret(presetId);
     await this.plugin.saveSettings();
     this.display();
@@ -998,6 +1118,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     const index = this.plugin.settings.llmPresets.findIndex((entry) => entry.id === presetId);
     if (index >= 0) {
       const openAISecretState = this.getPresetSecretState(presetId, 'openai');
+      const azureSecretState = this.getPresetSecretState(presetId, 'azure-openai');
       const geminiSecretState = this.getPresetSecretState(presetId, 'gemini');
       const clone = this.clonePreset(draft);
       const supportsSecretStorage = this.plugin.supportsSecretStorage();
@@ -1021,6 +1142,28 @@ export class Ink2MDSettingTab extends PluginSettingTab {
         openAISecretState.hasSecret = false;
         openAISecretState.dirty = false;
         openAISecretState.cleared = false;
+      }
+
+      if (clone.provider === 'azure-openai') {
+        const input = draft.azureOpenAI.apiKey?.trim() ?? '';
+        const shouldUpdateSecret = azureSecretState.dirty && !azureSecretState.cleared && input.length > 0;
+        const shouldClearSecret = azureSecretState.dirty && azureSecretState.cleared;
+        if (shouldUpdateSecret) {
+          await this.plugin.setAzureOpenAISecret(clone.id, input);
+          azureSecretState.hasSecret = true;
+        } else if (shouldClearSecret) {
+          await this.plugin.setAzureOpenAISecret(clone.id, '');
+          azureSecretState.hasSecret = false;
+        }
+        clone.azureOpenAI.apiKey = supportsSecretStorage ? '' : input;
+        azureSecretState.dirty = false;
+        azureSecretState.cleared = false;
+      } else {
+        await this.plugin.deleteAzureOpenAISecret(clone.id);
+        clone.azureOpenAI.apiKey = '';
+        azureSecretState.hasSecret = false;
+        azureSecretState.dirty = false;
+        azureSecretState.cleared = false;
       }
 
       if (clone.provider === 'gemini') {
@@ -1171,7 +1314,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     slider.sliderEl.insertAdjacentElement('afterend', valueEl);
   }
 
-  private describeSecretStorageLines(presetId: string, provider: 'openai' | 'gemini'): string[] {
+  private describeSecretStorageLines(presetId: string, provider: 'openai' | 'azure-openai' | 'gemini'): string[] {
     if (!this.plugin.supportsSecretStorage()) {
       return ["Stored with plugin settings because Obsidian's keychain isn't available in this Obsidian build."];
     }
