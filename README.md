@@ -4,8 +4,8 @@ Ink2MD is an Obsidian plugin that brings handwritten notebooks into your vault. 
 
 ## Features
 - Watch multiple input directories (with recursive scanning) for handwritten notes.
-- Convert JPG/PNG/WebP images, PDFs, and Supernote `.note` notebooks into PNG pages with an optional width cap.
-- Generate Markdown summaries through OpenAI or any OpenAI-compatible local endpoint.
+- Convert JPG/PNG/WebP images and PDFs into PNG pages with an optional width cap.
+- Generate Markdown summaries through OpenAI, Google Gemini, or any OpenAI-compatible local endpoint.
 - Store all generated pages and Markdown files inside a dedicated folder in your vault.
 
 ## Setup
@@ -16,8 +16,8 @@ Ink2MD is an Obsidian plugin that brings handwritten notebooks into your vault. 
 
 ## Configuration
 Open **Settings → Community plugins → Ink2MD** and adjust:
-- **Sources**: each source points at one or more absolute directories, controls which import types (images, PDFs, Supernote) run, holds conversion options (PNG width, PDF DPI, overwrite policy), and decides whether generated notes open automatically. Every source links to exactly one LLM preset.
-- **LLM presets**: reusable provider profiles containing OpenAI credentials or local endpoint details, prompt templates, image detail, model name, image-width limits, and whether generation streams live or waits for the full response. Ollama works well out of the box when exposing its OpenAI-compatible server with the `mistral-small:3.1` model.
+- **Sources**: each source points at one or more absolute directories, controls which import types (images, PDFs) run, holds conversion options (PNG width, PDF DPI, overwrite policy), and decides whether generated notes open automatically. Every source links to exactly one LLM preset.
+- **LLM presets**: reusable provider profiles containing OpenAI, Google Gemini, or local endpoint details along with prompt templates, image detail, model name, image-width limits, and whether generation streams live or waits for the full response. Ollama works well out of the box when exposing its OpenAI-compatible server with the `mistral-small:3.1` model.
 - **Processed files cache**: clear it globally from the Sources section or per source if you need to force a re-import.
 
 ## Usage

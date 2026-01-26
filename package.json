@@ -29,10 +29,10 @@
     "typescript-eslint": "8.35.1"
   },
   "dependencies": {
+    "@google/genai": "^1.38.0",
     "jszip": "^3.10.1",
     "obsidian": "latest",
     "openai": "^6.16.0",
-    "pdfjs-dist": "^5.4.530",
-    "supernote-typescript": "^0.3.0"
+    "pdfjs-dist": "^5.4.530"
   }
 }

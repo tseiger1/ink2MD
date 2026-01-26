@@ -1,6 +1,7 @@
 import { ConvertedNote, LLMPreset, MarkdownStreamHandler } from '../types';
 import { OpenAIVisionProvider } from './openaiProvider';
 import { LocalVisionProvider } from './localProvider';
+import { GeminiVisionProvider } from './geminiProvider';
 
 interface VisionProvider {
 	generateMarkdown(note: ConvertedNote, llmMaxWidth: number, signal?: AbortSignal): Promise<string>;
@@ -20,6 +21,8 @@ export class LLMService {
 		this.llmMaxWidth = preset.llmMaxWidth;
 		if (preset.provider === 'openai') {
 			this.provider = new OpenAIVisionProvider(preset.openAI);
+		} else if (preset.provider === 'gemini') {
+			this.provider = new GeminiVisionProvider(preset.gemini);
 		} else {
 			this.provider = new LocalVisionProvider(preset.local);
 		}

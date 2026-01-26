@@ -1,7 +1,8 @@
+import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
-import { Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from 'obsidian';
+import { FileSystemAdapter, Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from 'obsidian';
 import type { SecretStorage } from 'obsidian';
 import { DEFAULT_SETTINGS, Ink2MDSettingTab } from './settings';
 import type {
@@ -22,12 +23,21 @@ import { hashFile } from './utils/hash';
 import { createStableId, slugifyFilePath } from './utils/naming';
 import { isImageFile } from './importers/imageImporter';
 import { isPdfFile } from './importers/pdfImporter';
-import { isSupernoteFile } from './importers/supernoteImporter';
 import { Ink2MDDropView, VIEW_TYPE_INK2MD_DROP } from './ui/dropView';
 
+type SecretProvider = 'openai' | 'gemini';
+
 const OPENAI_SECRET_ID = 'ink2md-openai-api-key';
-const OPENAI_SECRET_PREFIX = `${OPENAI_SECRET_ID}-`;
-const OPENAI_SECRET_SUFFIX_LENGTH = 10;
+const GEMINI_SECRET_ID = 'ink2md-gemini-api-key';
+const SECRET_SUFFIX_LENGTH = 10;
+const PROVIDER_SECRET_PREFIX: Record<SecretProvider, string> = {
+	openai: `${OPENAI_SECRET_ID}-`,
+	gemini: `${GEMINI_SECRET_ID}-`,
+};
+const PROVIDER_SECRET_ID: Record<SecretProvider, string> = {
+	openai: OPENAI_SECRET_ID,
+	gemini: GEMINI_SECRET_ID,
+};
 
 type SourceFingerprint = {
 	hash: string;
@@ -60,6 +70,7 @@ interface ImportRunOptions {
 	private abortController: AbortController | null = null;
 	private pendingSpinnerStop = false;
 	private openAISecrets: Record<string, string | null> = {};
+	private geminiSecrets: Record<string, string | null> = {};
 	private notifiedMissingSecretStorage = false;
 	private stagedFiles = new Set<string>();
 	private dropzoneCacheDir: string | null = null;
@@ -113,8 +124,12 @@ interface ImportRunOptions {
 
 	async triggerImport() {
 		await this.withImportLock(async () => {
-		const jobs = await this.collectImportJobs();
+		const { jobs, blockedByScript } = await this.collectImportJobs();
 		if (!jobs.length) {
+			if (blockedByScript) {
+				this.setStatus('Script blocked import');
+				return 'Script blocked';
+			}
 			new Notice('Ink2MD: no sources are ready to import. Configure at least one source with directories and an LLM preset.');
 			this.setStatus('Configuration required');
 			return 'Configuration required';
@@ -145,6 +160,10 @@ interface ImportRunOptions {
 		}
 		const preset = this.resolvePresetForSource(sourceConfig);
 		if (!preset) {
+			return;
+		}
+		const scriptReady = await this.runPreImportScriptForSource(sourceConfig);
+		if (!scriptReady) {
 			return;
 		}
 		const notes: NoteSource[] = [];
@@ -194,11 +213,12 @@ interface ImportRunOptions {
 		}
 	}
 
-	private async collectImportJobs(): Promise<ImportJob[]> {
+	private async collectImportJobs(): Promise<{ jobs: ImportJob[]; blockedByScript: boolean }> {
 		const jobs: ImportJob[] = [];
+		let blockedByScript = false;
 		const sources = this.settings.sources ?? [];
 		if (!sources.length) {
-			return jobs;
+			return { jobs, blockedByScript };
 		}
 
 		for (const sourceConfig of sources) {
@@ -213,13 +233,74 @@ interface ImportRunOptions {
 			if (!preset) {
 				continue;
 			}
+			const scriptReady = await this.runPreImportScriptForSource(sourceConfig);
+			if (!scriptReady) {
+				blockedByScript = true;
+				continue;
+			}
 			const notes = await discoverNoteSourcesForConfig(sourceConfig);
 			for (const note of notes) {
 				jobs.push({ note, sourceConfig, preset });
 			}
 		}
 
-		return jobs;
+		return { jobs, blockedByScript };
+	}
+
+	private async runPreImportScriptForSource(sourceConfig: SourceConfig): Promise<boolean> {
+		const command = sourceConfig.preImportScript?.trim();
+		if (!command) {
+			return true;
+		}
+		this.setStatus(`Running script: ${sourceConfig.label}`);
+		return await new Promise((resolve) => {
+			const cwd = this.getVaultBasePath() ?? undefined;
+			const child = spawn(command, {
+				shell: true,
+				cwd,
+			});
+			let stdout = '';
+			let stderr = '';
+			child.stdout?.on('data', (data) => {
+				stdout += data.toString();
+			});
+			child.stderr?.on('data', (data) => {
+				stderr += data.toString();
+			});
+			child.on('error', (error) => {
+				console.error(`[ink2md] Failed to start pre-import script for ${sourceConfig.label}`, error);
+				new Notice(`Ink2MD: Pre-import script for "${sourceConfig.label}" failed to start (${error.message}).`);
+				resolve(false);
+			});
+				child.on('close', (code, signal) => {
+				if (code === 0) {
+						let successMessage = stdout.trim();
+						if (!successMessage) {
+							successMessage = 'Script finished successfully';
+						}
+						if (successMessage.length > 280) {
+							successMessage = `${successMessage.slice(0, 277)}...`;
+						}
+						new Notice(`Ink2MD: script for "${sourceConfig.label}" succeeded (${successMessage}).`);
+						resolve(true);
+						return;
+					}
+					let message = stderr.trim() || stdout.trim();
+					if (!message) {
+						if (signal) {
+							message = `terminated (${signal})`;
+						} else {
+							message = `exit code ${code ?? 'unknown'}`;
+						}
+					}
+					if (message.length > 280) {
+						message = `${message.slice(0, 277)}...`;
+					}
+					new Notice(`Ink2MD: Pre-import script for "${sourceConfig.label}" failed (${message}).`);
+					console.error(`[ink2md] Pre-import script for ${sourceConfig.label} failed: ${message}`);
+					resolve(false);
+				});
+		});
 	}
 
 	private resolvePresetForSource(sourceConfig: SourceConfig): LLMPreset | null {
@@ -234,6 +315,10 @@ interface ImportRunOptions {
 		}
 		if (preset.provider === 'openai' && !preset.openAI.apiKey) {
 			new Notice(`Ink2MD: preset "${preset.label}" requires an OpenAI API key.`);
+			return null;
+		}
+		if (preset.provider === 'gemini' && !preset.gemini.apiKey) {
+			new Notice(`Ink2MD: preset "${preset.label}" requires a Gemini API key.`);
 			return null;
 		}
 		return preset;
@@ -354,9 +439,6 @@ interface ImportRunOptions {
 		if (isPdfFile(filePath)) {
 			return 'pdf';
 		}
-		if (isSupernoteFile(filePath)) {
-			return 'supernote';
-		}
 		if (isImageFile(filePath)) {
 			return 'image';
 		}
@@ -373,9 +455,6 @@ interface ImportRunOptions {
 		}
 		if (format === 'pdf') {
 			return sourceConfig.includePdfs;
-		}
-		if (format === 'supernote') {
-			return sourceConfig.includeSupernote;
 		}
 		return false;
 	}
@@ -406,15 +485,20 @@ interface ImportRunOptions {
 		if (!preset) {
 			return null;
 		}
-		const apiKey = preset.provider === 'openai' ? this.getOpenAISecret(preset.id) || preset.openAI.apiKey : preset.openAI.apiKey;
+		const resolvedOpenAIKey = this.getOpenAISecret(preset.id) || preset.openAI.apiKey;
+		const resolvedGeminiKey = this.getGeminiSecret(preset.id) || preset.gemini.apiKey;
 		return {
 			...preset,
 			openAI: {
 				...preset.openAI,
-				apiKey: apiKey ?? '',
+				apiKey: resolvedOpenAIKey ?? '',
 			},
 			local: {
 				...preset.local,
+			},
+			gemini: {
+				...preset.gemini,
+				apiKey: resolvedGeminiKey ?? '',
 			},
 		};
 	}
@@ -823,15 +907,16 @@ interface ImportRunOptions {
 		return this.getSecretStorage() !== null;
 	}
 
-	private getSecretBindings(): Record<string, string> {
+	private getSecretBindings(): Record<string, Partial<Record<SecretProvider, string>>> {
 		if (!this.settings.secretBindings) {
 			this.settings.secretBindings = {};
 		}
 		return this.settings.secretBindings;
 	}
 
-	private getSecretIdForPreset(presetId: string): string | null {
-		return this.getSecretBindings()[presetId] ?? null;
+	private getSecretIdForPreset(presetId: string, provider: SecretProvider): string | null {
+		const bindings = this.getSecretBindings()[presetId];
+		return bindings?.[provider] ?? null;
 	}
 
 	getDropzoneSources(): SourceConfig[] {
@@ -878,33 +963,38 @@ interface ImportRunOptions {
 	private generateSecretSuffix(): string {
 		const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
 		let suffix = '';
-		while (suffix.length < OPENAI_SECRET_SUFFIX_LENGTH) {
+		while (suffix.length < SECRET_SUFFIX_LENGTH) {
 			const index = Math.floor(Math.random() * alphabet.length);
 			suffix += alphabet.charAt(index);
 		}
 		return suffix;
 	}
 
-	private generateSecretId(existing = new Set<string>()): string {
+	private generateSecretId(provider: SecretProvider, existing = new Set<string>()): string {
 		let attempt = '';
 		do {
-			attempt = `${OPENAI_SECRET_PREFIX}${this.generateSecretSuffix()}`;
+			attempt = `${PROVIDER_SECRET_PREFIX[provider]}${this.generateSecretSuffix()}`;
 		} while (existing.has(attempt));
 		return attempt;
 	}
 
-	private findReusableSecretId(storage: SecretStorage): string | null {
+	private findReusableSecretId(storage: SecretStorage, provider: SecretProvider): string | null {
 		if (typeof storage.listSecrets !== 'function') {
 			return null;
 		}
-		const used = new Set(Object.values(this.getSecretBindings()));
+		const used = new Set<string>();
+		for (const entry of Object.values(this.getSecretBindings())) {
+			for (const value of Object.values(entry ?? {})) {
+				used.add(value);
+			}
+		}
 		try {
 			const all = storage.listSecrets();
 			for (const id of all) {
 				if (typeof id !== 'string') {
 					continue;
 				}
-				if (!id.startsWith(OPENAI_SECRET_PREFIX)) {
+				if (!id.startsWith(PROVIDER_SECRET_PREFIX[provider])) {
 					continue;
 				}
 				if (!used.has(id)) {
@@ -917,17 +1007,26 @@ interface ImportRunOptions {
 		return null;
 	}
 
-	private ensureSecretBinding(presetId: string, storage: SecretStorage): string {
+	private ensureSecretBinding(presetId: string, provider: SecretProvider, storage: SecretStorage): string {
 		const bindings = this.getSecretBindings();
-		if (bindings[presetId]) {
-			return bindings[presetId];
+		if (!bindings[presetId]) {
+			bindings[presetId] = {};
 		}
-		const reusable = this.findReusableSecretId(storage);
-		const existing = new Set(Object.values(bindings));
+		const presetBindings = bindings[presetId]!;
+		if (presetBindings[provider]) {
+			return presetBindings[provider]!;
+		}
+		const reusable = this.findReusableSecretId(storage, provider);
+		const existing = new Set<string>();
+		for (const entry of Object.values(bindings)) {
+			for (const value of Object.values(entry ?? {})) {
+				existing.add(value);
+			}
+		}
 		if (typeof storage.listSecrets === 'function') {
 			try {
 				for (const id of storage.listSecrets()) {
-					if (typeof id === 'string' && id.startsWith(OPENAI_SECRET_PREFIX)) {
+					if (typeof id === 'string' && id.startsWith(PROVIDER_SECRET_PREFIX[provider])) {
 						existing.add(id);
 					}
 				}
@@ -935,19 +1034,22 @@ interface ImportRunOptions {
 				console.warn('[ink2md] Unable to inspect secret storage entries while allocating binding.', error);
 			}
 		}
-		const assigned = reusable ?? this.generateSecretId(existing);
-		bindings[presetId] = assigned;
+		const assigned = reusable ?? this.generateSecretId(provider, existing);
+		presetBindings[provider] = assigned;
 		return assigned;
 	}
 
-	getPresetSecretId(presetId: string): string | null {
+	getPresetSecretId(presetId: string, provider: SecretProvider = 'openai'): string | null {
 		if (!this.supportsSecretStorage()) {
 			return null;
 		}
-		return this.getSecretIdForPreset(presetId);
+		return this.getSecretIdForPreset(presetId, provider);
 	}
 
-	private buildLegacySecretIds(presetId: string): string[] {
+	private buildLegacySecretIds(presetId: string, provider: SecretProvider): string[] {
+		if (provider !== 'openai') {
+			return [];
+		}
 		const colonId = `${OPENAI_SECRET_ID}:${presetId}`;
 		const sanitized = presetId
 			.toLowerCase()
@@ -963,7 +1065,7 @@ interface ImportRunOptions {
 			const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
 			return preset?.openAI.apiKey?.trim() || null;
 		}
-		const binding = this.getSecretIdForPreset(presetId);
+		const binding = this.getSecretIdForPreset(presetId, 'openai');
 		if (binding) {
 			try {
 				const secret = storage.getSecret(binding);
@@ -975,18 +1077,39 @@ interface ImportRunOptions {
 				console.warn('[ink2md] Unable to read OpenAI API key from secret storage.', error);
 			}
 		}
-		const legacyIds = this.buildLegacySecretIds(presetId);
+		const legacyIds = this.buildLegacySecretIds(presetId, 'openai');
 		for (const candidate of legacyIds) {
 			try {
 				const secret = storage.getSecret(candidate);
 				const trimmed = typeof secret === 'string' ? secret.trim() : '';
 				if (trimmed.length > 0) {
-					const target = binding ?? this.ensureSecretBinding(presetId, storage);
+					const target = binding ?? this.ensureSecretBinding(presetId, 'openai', storage);
 					storage.setSecret(target, trimmed);
 					return trimmed;
 				}
 			} catch (error) {
 				console.warn('[ink2md] Unable to read OpenAI API key from legacy secret storage entry.', error);
+			}
+		}
+		return null;
+	}
+
+	private readGeminiSecretFromStore(presetId: string): string | null {
+		const storage = this.getSecretStorage();
+		if (!storage) {
+			const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+			return preset?.gemini.apiKey?.trim() || null;
+		}
+		const binding = this.getSecretIdForPreset(presetId, 'gemini');
+		if (binding) {
+			try {
+				const secret = storage.getSecret(binding);
+				const trimmed = typeof secret === 'string' ? secret.trim() : '';
+				if (trimmed.length > 0) {
+					return trimmed;
+				}
+			} catch (error) {
+				console.warn('[ink2md] Unable to read Gemini API key from secret storage.', error);
 			}
 		}
 		return null;
@@ -1025,7 +1148,7 @@ interface ImportRunOptions {
 			return;
 		}
 		try {
-			const binding = this.ensureSecretBinding(presetId, storage);
+			const binding = this.ensureSecretBinding(presetId, 'openai', storage);
 			storage.setSecret(binding, this.openAISecrets[presetId] ?? '');
 		} catch (error) {
 			console.error('[ink2md] Unable to persist OpenAI API key in secret storage.', error);
@@ -1035,10 +1158,14 @@ interface ImportRunOptions {
 	async deleteOpenAISecret(presetId: string) {
 		delete this.openAISecrets[presetId];
 		const bindings = this.getSecretBindings();
-		const binding = bindings[presetId];
+		const entry = bindings[presetId];
+		const binding = entry?.openai;
 		const storage = this.getSecretStorage();
 		if (binding) {
-			delete bindings[presetId];
+			delete entry!.openai;
+			if (Object.keys(entry!).length === 0) {
+				delete bindings[presetId];
+			}
 			if (storage) {
 				try {
 					storage.setSecret(binding, '');
@@ -1053,9 +1180,74 @@ interface ImportRunOptions {
 		}
 	}
 
+	getGeminiSecret(presetId: string): string {
+		const cached = this.geminiSecrets[presetId];
+		if (cached && cached.length > 0) {
+			return cached;
+		}
+		const secret = this.readGeminiSecretFromStore(presetId);
+		this.geminiSecrets[presetId] = secret;
+		return secret ?? '';
+	}
+
+	hasGeminiSecret(presetId: string): boolean {
+		return this.getGeminiSecret(presetId).length > 0;
+	}
+
+	async setGeminiSecret(presetId: string, value: string) {
+		const trimmed = value.trim();
+		this.geminiSecrets[presetId] = trimmed.length > 0 ? trimmed : null;
+		const storage = this.getSecretStorage();
+		if (!storage) {
+			const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+			if (preset) {
+				preset.gemini.apiKey = trimmed;
+			}
+			if (trimmed.length === 0 && preset) {
+				preset.gemini.apiKey = '';
+			}
+			if (!this.notifiedMissingSecretStorage) {
+				this.notifiedMissingSecretStorage = true;
+				new Notice('Ink2MD: this Obsidian version does not support the secure key vault. Keys are stored with plugin settings instead.');
+			}
+			return;
+		}
+		try {
+			const binding = this.ensureSecretBinding(presetId, 'gemini', storage);
+			storage.setSecret(binding, this.geminiSecrets[presetId] ?? '');
+		} catch (error) {
+			console.error('[ink2md] Unable to persist Gemini API key in secret storage.', error);
+		}
+	}
+
+	async deleteGeminiSecret(presetId: string) {
+		delete this.geminiSecrets[presetId];
+		const bindings = this.getSecretBindings();
+		const entry = bindings[presetId];
+		const binding = entry?.gemini;
+		const storage = this.getSecretStorage();
+		if (binding) {
+			delete entry!.gemini;
+			if (Object.keys(entry!).length === 0) {
+				delete bindings[presetId];
+			}
+			if (storage) {
+				try {
+					storage.setSecret(binding, '');
+				} catch (error) {
+					console.error('[ink2md] Unable to clear Gemini API key from secret storage.', error);
+				}
+			}
+		}
+		const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+		if (preset) {
+			preset.gemini.apiKey = '';
+		}
+	}
+
 	async loadSettings() {
 		const stored = (await this.loadData()) as Partial<Ink2MDSettings> | null;
-		let normalized: { settings: Ink2MDSettings; openAIKeys: Record<string, string> };
+		let normalized: { settings: Ink2MDSettings; openAIKeys: Record<string, string>; geminiKeys: Record<string, string> };
 		if (!stored || !Array.isArray((stored as Ink2MDSettings).sources) || !Array.isArray((stored as Ink2MDSettings).llmPresets)) {
 			normalized = this.migrateLegacySettings(stored ?? {});
 		} else {
@@ -1063,11 +1255,13 @@ interface ImportRunOptions {
 		}
 		this.settings = normalized.settings;
 		this.initializeOpenAISecrets(normalized.openAIKeys);
+		this.initializeGeminiSecrets(normalized.geminiKeys);
 	}
 
 	async saveSettings() {
 		for (const preset of this.settings.llmPresets) {
 			preset.openAI.apiKey = '';
+			preset.gemini.apiKey = '';
 		}
 		await this.saveData(this.settings);
 		this.refreshDropzoneViews();
@@ -1083,7 +1277,9 @@ interface ImportRunOptions {
 		}
 	}
 
-	private normalizeSettings(raw: Partial<Ink2MDSettings>): { settings: Ink2MDSettings; openAIKeys: Record<string, string> } {
+	private normalizeSettings(
+		raw: Partial<Ink2MDSettings>,
+	): { settings: Ink2MDSettings; openAIKeys: Record<string, string>; geminiKeys: Record<string, string> } {
 		const defaultPresetTemplate = DEFAULT_SETTINGS.llmPresets[0]!;
 		const defaultSourceTemplate =
 			DEFAULT_SETTINGS.sources.find((source) => source.type === 'filesystem') ?? DEFAULT_SETTINGS.sources[0]!;
@@ -1129,20 +1325,45 @@ interface ImportRunOptions {
 			};
 		}
 		const openAIKeys: Record<string, string> = {};
+		const geminiKeys: Record<string, string> = {};
 		for (const preset of presets) {
 			if (preset.openAI.apiKey) {
 				openAIKeys[preset.id] = preset.openAI.apiKey;
 			}
+			if (preset.gemini?.apiKey) {
+				geminiKeys[preset.id] = preset.gemini.apiKey;
+			}
 		}
-		const rawBindings = (raw as Ink2MDSettings)?.secretBindings ?? {};
-		const secretBindings: Record<string, string> = {};
+		const rawBindings = ((raw as Ink2MDSettings)?.secretBindings ?? {}) as Record<string, unknown>;
+		const secretBindings: Record<string, Partial<Record<SecretProvider, string>>> = {};
 		if (rawBindings && typeof rawBindings === 'object') {
-			for (const [presetId, secretId] of Object.entries(rawBindings)) {
+			for (const [presetId, binding] of Object.entries(rawBindings)) {
 				if (!presetIds.has(presetId)) {
 					continue;
 				}
-				if (typeof secretId === 'string' && secretId.startsWith(OPENAI_SECRET_PREFIX)) {
-					secretBindings[presetId] = secretId;
+				if (typeof binding === 'string') {
+					if (binding.startsWith(PROVIDER_SECRET_PREFIX.openai)) {
+						secretBindings[presetId] = { openai: binding };
+					}
+					continue;
+				}
+				if (binding && typeof binding === 'object') {
+					const bindingEntries = binding as Record<string, unknown>;
+					const entry: Partial<Record<SecretProvider, string>> = {};
+					for (const [providerKey, secretId] of Object.entries(bindingEntries)) {
+						if (providerKey === 'openai' || providerKey === 'gemini') {
+							if (typeof secretId !== 'string') {
+								continue;
+							}
+							const typedKey = providerKey as SecretProvider;
+							if (secretId.startsWith(PROVIDER_SECRET_PREFIX[typedKey])) {
+								entry[typedKey] = secretId;
+							}
+						}
+					}
+					if (Object.keys(entry).length) {
+						secretBindings[presetId] = entry;
+					}
 				}
 			}
 		}
@@ -1154,13 +1375,19 @@ interface ImportRunOptions {
 				secretBindings,
 			},
 			openAIKeys,
+			geminiKeys,
 		};
 	}
 
-	private migrateLegacySettings(raw: any): { settings: Ink2MDSettings; openAIKeys: Record<string, string> } {
+	private migrateLegacySettings(raw: any): {
+		settings: Ink2MDSettings;
+		openAIKeys: Record<string, string>;
+		geminiKeys: Record<string, string>;
+	} {
 		const presetId = this.generateId('preset');
 		const sourceId = this.generateId('source');
 		const openAIKeys: Record<string, string> = {};
+		const geminiKeys: Record<string, string> = {};
 		const legacyProvider = raw?.llmProvider ?? 'openai';
 		const legacyGenerationMode = raw?.llmGenerationMode ?? 'batch';
 		const defaultPresetTemplate = DEFAULT_SETTINGS.llmPresets[0]!;
@@ -1183,6 +1410,9 @@ interface ImportRunOptions {
 				...(raw?.local ?? {}),
 				promptTemplate: legacyLocalPrompt,
 			},
+			gemini: {
+				...defaultPresetTemplate.gemini,
+			},
 		};
 		if (preset.openAI.apiKey) {
 			openAIKeys[preset.id] = preset.openAI.apiKey;
@@ -1195,7 +1425,6 @@ interface ImportRunOptions {
 			recursive: true,
 			includeImages: raw?.includeImages ?? true,
 			includePdfs: raw?.includePdfs ?? true,
-			includeSupernote: raw?.includeSupernote ?? true,
 			attachmentMaxWidth: raw?.attachmentMaxWidth ?? raw?.maxImageWidth ?? defaultSourceTemplate.attachmentMaxWidth,
 			pdfDpi: raw?.pdfDpi ?? defaultSourceTemplate.pdfDpi,
 			replaceExisting: raw?.replaceExisting ?? defaultSourceTemplate.replaceExisting,
@@ -1204,6 +1433,7 @@ interface ImportRunOptions {
 			openInNewLeaf: true,
 			llmPresetId: presetId,
 			type: 'filesystem',
+			preImportScript: '',
 		};
 		const processedSources: Record<string, ProcessedSourceInfo> = {};
 		const rawProcessed = raw?.processedSources ?? {};
@@ -1222,6 +1452,7 @@ interface ImportRunOptions {
 				secretBindings: {},
 			},
 			openAIKeys,
+			geminiKeys,
 		};
 	}
 
@@ -1246,6 +1477,10 @@ interface ImportRunOptions {
 				...fallback.local,
 				...(base.local ?? {}),
 			},
+			gemini: {
+				...fallback.gemini,
+				...(base.gemini ?? {}),
+			},
 		};
 	}
 
@@ -1260,6 +1495,9 @@ interface ImportRunOptions {
 		const id = base.id && base.id.trim().length ? base.id : this.generateId('source');
 		const directories = Array.isArray(base.directories) ? base.directories.filter((dir) => typeof dir === 'string' && dir.trim().length > 0) : [];
 		const requestedPreset = base.llmPresetId && presetIds.has(base.llmPresetId) ? base.llmPresetId : defaultPresetId;
+		const preImportScript = typeof base.preImportScript === 'string'
+			? base.preImportScript.trim()
+			: (fallback.preImportScript ?? '');
 		return {
 			...fallback,
 			...base,
@@ -1270,7 +1508,6 @@ interface ImportRunOptions {
 			recursive: base.recursive ?? fallback.recursive,
 			includeImages: base.includeImages ?? fallback.includeImages,
 			includePdfs: base.includePdfs ?? fallback.includePdfs,
-			includeSupernote: base.includeSupernote ?? fallback.includeSupernote,
 			attachmentMaxWidth: base.attachmentMaxWidth ?? fallback.attachmentMaxWidth,
 			pdfDpi: base.pdfDpi ?? fallback.pdfDpi,
 			replaceExisting: base.replaceExisting ?? fallback.replaceExisting,
@@ -1278,6 +1515,7 @@ interface ImportRunOptions {
 			openGeneratedNotes: base.openGeneratedNotes ?? fallback.openGeneratedNotes,
 			openInNewLeaf: base.openInNewLeaf ?? fallback.openInNewLeaf,
 			llmPresetId: requestedPreset,
+			preImportScript,
 		};
 	}
 
@@ -1301,7 +1539,7 @@ interface ImportRunOptions {
 			const initial = initialKeys[preset.id]?.trim();
 			if (initial) {
 				try {
-					const binding = this.ensureSecretBinding(preset.id, storage);
+					const binding = this.ensureSecretBinding(preset.id, 'openai', storage);
 					storage.setSecret(binding, initial);
 				} catch (error) {
 					console.error('[ink2md] Unable to migrate OpenAI API key into secret storage.', error);
@@ -1313,8 +1551,47 @@ interface ImportRunOptions {
 		}
 	}
 
+	private initializeGeminiSecrets(initialKeys: Record<string, string>) {
+		this.geminiSecrets = {};
+		const storage = this.getSecretStorage();
+		if (!storage) {
+			if (Object.keys(initialKeys).length) {
+				console.warn('[ink2md] Secret storage unavailable; unable to migrate stored Gemini API keys.');
+			}
+			for (const preset of this.settings.llmPresets) {
+				const initial = initialKeys[preset.id]?.trim() || '';
+				this.geminiSecrets[preset.id] = initial || null;
+				preset.gemini.apiKey = initial;
+			}
+			return;
+		}
+		for (const preset of this.settings.llmPresets) {
+			const initial = initialKeys[preset.id]?.trim();
+			if (initial) {
+				try {
+					const binding = this.ensureSecretBinding(preset.id, 'gemini', storage);
+					storage.setSecret(binding, initial);
+				} catch (error) {
+					console.error('[ink2md] Unable to migrate Gemini API key into secret storage.', error);
+				}
+			}
+			const resolved = this.readGeminiSecretFromStore(preset.id);
+			this.geminiSecrets[preset.id] = resolved;
+			preset.gemini.apiKey = '';
+		}
+	}
+
 	private generateId(prefix: string): string {
 		return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+	}
+
+	private getVaultBasePath(): string | null {
+		const adapter = this.app.vault.adapter;
+		if (adapter instanceof FileSystemAdapter) {
+			return adapter.getBasePath();
+		}
+		const legacyPath = (adapter as { basePath?: string }).basePath;
+		return typeof legacyPath === 'string' ? legacyPath : null;
 	}
 }
 

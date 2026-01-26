@@ -1,6 +1,6 @@
-import { AbstractInputSuggest, App, Modal, Notice, PluginSettingTab, Setting, SliderComponent, setIcon } from 'obsidian';
+import { AbstractInputSuggest, App, Modal, Notice, PluginSettingTab, Setting, SliderComponent, TextComponent, setIcon } from 'obsidian';
 import Ink2MDPlugin from './main';
-import { Ink2MDSettings, LLMGenerationMode, LLMProvider, LLMPreset, SourceConfig } from './types';
+import { Ink2MDSettings, LLMGenerationMode, LLMProvider, LLMPreset, SourceConfig, SourceType } from './types';
 
 type PresetSecretState = {
   hasSecret: boolean;
@@ -27,7 +27,7 @@ const DEFAULT_SOURCE_ID = 'source-default';
 const DEFAULT_OUTPUT_ROOT = 'Ink2MD';
 const DEFAULT_SOURCE_LABEL = 'Source';
 const DEFAULT_DROPZONE_ID = 'source-dropzone';
-const DEFAULT_DROPZONE_LABEL = 'Dropzone';
+const DEFAULT_DROPZONE_LABEL = 'Dropzone Target';
 
 const DEFAULT_LLM_PRESET: LLMPreset = {
   id: DEFAULT_PRESET_ID,
@@ -48,42 +48,47 @@ const DEFAULT_LLM_PRESET: LLMPreset = {
     promptTemplate: DEFAULT_PROMPT,
     imageDetail: 'low',
   },
+  gemini: {
+    apiKey: '',
+    model: 'gemini-1.5-flash',
+    promptTemplate: DEFAULT_PROMPT,
+  },
 };
 
 const DEFAULT_SOURCE: SourceConfig = {
   id: DEFAULT_SOURCE_ID,
-  label: DEFAULT_SOURCE_LABEL,
+  label: `${DEFAULT_SOURCE_LABEL} 1`,
   type: 'filesystem',
   directories: [],
   recursive: true,
   includeImages: true,
   includePdfs: true,
-  includeSupernote: true,
   attachmentMaxWidth: 0,
   pdfDpi: 300,
   replaceExisting: false,
-  outputFolder: `${DEFAULT_OUTPUT_ROOT}/${DEFAULT_SOURCE_LABEL}`,
+  outputFolder: `${DEFAULT_OUTPUT_ROOT}/${DEFAULT_SOURCE_LABEL} 1`,
   openGeneratedNotes: false,
   openInNewLeaf: true,
   llmPresetId: DEFAULT_PRESET_ID,
+  preImportScript: '',
 };
 
 const DEFAULT_DROPZONE_SOURCE: SourceConfig = {
   id: DEFAULT_DROPZONE_ID,
-  label: DEFAULT_DROPZONE_LABEL,
+  label: `${DEFAULT_DROPZONE_LABEL} 1`,
   type: 'dropzone',
   directories: [],
   recursive: false,
   includeImages: true,
   includePdfs: true,
-  includeSupernote: true,
   attachmentMaxWidth: 0,
   pdfDpi: 300,
   replaceExisting: false,
-  outputFolder: `${DEFAULT_OUTPUT_ROOT}/${DEFAULT_DROPZONE_LABEL}`,
+  outputFolder: `${DEFAULT_OUTPUT_ROOT}/${DEFAULT_DROPZONE_LABEL} 1`,
   openGeneratedNotes: false,
   openInNewLeaf: true,
   llmPresetId: DEFAULT_PRESET_ID,
+  preImportScript: '',
 };
 
 export const DEFAULT_SETTINGS: Ink2MDSettings = {
@@ -100,6 +105,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   private sourceDrafts = new Map<string, SourceConfig>();
   private presetDrafts = new Map<string, LLMPreset>();
   private presetSecretStates = new Map<string, PresetSecretState>();
+  private autoLabelStates = new Map<string, boolean>();
 
   constructor(app: App, plugin: Ink2MDPlugin) {
     super(app, plugin);
@@ -124,7 +130,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   private renderSourcesSection(containerEl: HTMLElement) {
     const { sectionEl, actions } = this.createSection(
       containerEl,
-      'Sources',
+      'Sources & Targets',
       'Define folder sources or dropzone targets for manual imports.',
     );
 
@@ -135,6 +141,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       this.plugin.settings.processedSources = {};
       await this.plugin.saveSettings();
       new Notice('Ink2MD: cleared cache for every source.');
+      this.display();
     }, !this.hasAnyCache());
     this.createTextButton(actions, '+ Add source', () => {
       const preset = this.plugin.settings.llmPresets[0];
@@ -142,15 +149,19 @@ export class Ink2MDSettingTab extends PluginSettingTab {
         new Notice('Create a preset before adding sources.');
         return;
       }
-      const label = `Source ${this.plugin.settings.sources.length + 1}`;
       const newSource: SourceConfig = {
         ...this.cloneSource(DEFAULT_SOURCE),
         id: this.createId('source'),
-        label,
-        outputFolder: this.getDefaultOutputFolder(label),
+        label: this.buildAutoLabel(
+          DEFAULT_SOURCE_LABEL,
+          this.countSourcesOfType('filesystem') + 1,
+        ),
+        outputFolder: '',
         llmPresetId: preset.id,
       };
+      newSource.outputFolder = this.getDefaultOutputFolder(newSource.label);
       this.plugin.settings.sources.unshift(newSource);
+      this.autoLabelStates.set(newSource.id, true);
       this.expandedSources.add(newSource.id);
       this.sourceDrafts.set(newSource.id, this.cloneSource(newSource));
       void this.plugin.saveSettings();
@@ -205,7 +216,6 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       this.plugin.settings.llmPresets.unshift(newPreset);
       this.expandedPresets.add(newPreset.id);
       this.presetDrafts.set(newPreset.id, this.clonePreset(newPreset));
-      this.presetSecretStates.set(newPreset.id, { hasSecret: false, dirty: false, cleared: false });
       void this.plugin.saveSettings();
       this.display();
     });
@@ -243,32 +253,64 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   }
 
   private renderSourceDetails(container: HTMLElement, draft: SourceConfig, titleEl: HTMLElement, summaryEl: HTMLElement) {
-    new Setting(container)
-      .setName('Label')
-      .setDesc('Shown in the source list.')
-      .addText((text) =>
-        text
-          .setValue(draft.label)
-          .onChange((value) => {
-            draft.label = value.trim() || draft.label;
-            titleEl.setText(draft.label);
-          }),
-      );
+    let labelInput: TextComponent | null = null;
+    let isAutoLabel = this.isAutoLabel(draft);
 
     new Setting(container)
       .setName('Source type')
       .setDesc('Watch folders automatically or use the right sidebar dropzone view.')
       .addDropdown((dropdown) =>
         dropdown
-          .addOption('filesystem', 'Watch folders')
-          .addOption('dropzone', 'Dropzone view')
+          .addOption('filesystem', 'Folder source')
+          .addOption('dropzone', 'Dropzone target')
           .setValue(draft.type ?? 'filesystem')
           .onChange((value) => {
             draft.type = value as SourceConfig['type'];
             summaryEl.setText(this.describeSource(draft));
+            if (isAutoLabel) {
+              const previousLabel = draft.label;
+              const suggested = this.getDefaultLabelForType(
+                draft.type ?? 'filesystem',
+                this.getAutoLabelPositionFor(draft, draft.type ?? 'filesystem'),
+              );
+              draft.label = suggested;
+              labelInput?.setValue(suggested);
+              titleEl.setText(draft.label);
+              this.maybeSyncOutputFolder(draft, previousLabel);
+              this.setAutoLabelState(draft.id, true);
+            }
+            isAutoLabel = this.isAutoLabel(draft);
             this.display();
           }),
       );
+
+    new Setting(container)
+      .setName('Label')
+      .setDesc('Shown in the source list.')
+      .addText((text) => {
+        labelInput = text;
+        labelInput
+          .setValue(draft.label)
+          .onChange((value) => {
+            const previousLabel = draft.label;
+            const raw = value.trim();
+            const labelIndex = this.plugin.settings.sources.indexOf(draft);
+            const defaultLabel = this.getDefaultLabelForType(
+              draft.type ?? 'filesystem',
+              this.getAutoLabelPositionFor(draft, draft.type ?? 'filesystem'),
+            );
+            draft.label = raw || defaultLabel;
+            titleEl.setText(draft.label);
+            const auto = raw.length === 0 || draft.label === defaultLabel;
+            isAutoLabel = auto;
+            this.setAutoLabelState(draft.id, auto);
+            if (auto) {
+              this.maybeSyncOutputFolder(draft, previousLabel);
+            }
+          });
+      });
+
+    this.addSettingsDivider(container);
 
     if (draft.type === 'filesystem') {
       const directoriesSetting = new Setting(container)
@@ -305,6 +347,18 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     }
 
     new Setting(container)
+      .setName('Pre-import script (optional)')
+      .setDesc('Command to run before importing from this source. Import only continues if it exits with code 0.')
+      .addText((text) =>
+        text
+          .setPlaceholder('/path/to/script.sh')
+          .setValue(draft.preImportScript ?? '')
+          .onChange((value) => {
+            draft.preImportScript = value.trim();
+          }),
+      );
+
+    new Setting(container)
       .setName('Image imports (.png/.jpg/.webp)')
       .addToggle((toggle) =>
         toggle
@@ -324,15 +378,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(container)
-      .setName('Supernote imports (.note)')
-      .addToggle((toggle) =>
-        toggle
-          .setValue(draft.includeSupernote)
-          .onChange((value) => {
-            draft.includeSupernote = value;
-          }),
-      );
+    this.addSettingsDivider(container);
 
     new Setting(container)
       .setName('Output folder')
@@ -407,6 +453,8 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           });
       });
 
+    this.addSettingsDivider(container);
+
     new Setting(container)
       .setName('LLM preset')
       .setDesc('Pick which preset powers this source.')
@@ -436,10 +484,11 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
     new Setting(container)
       .setName('Provider')
-      .setDesc('Choose between OpenAI and a local OpenAI-compatible endpoint.')
+      .setDesc('Choose between OpenAI, Google Gemini, or a local OpenAI-compatible endpoint.')
       .addDropdown((dropdown) =>
         dropdown
           .addOption('openai', 'OpenAI')
+          .addOption('gemini', 'Google Gemini')
           .addOption('local', 'Local')
           .setValue(draft.provider)
           .onChange((value) => {
@@ -479,7 +528,9 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
     const providerFields = container.createDiv({ cls: 'ink2md-provider-fields' });
     if (draft.provider === 'openai') {
-      this.renderOpenAIFields(providerFields, draft, this.getPresetSecretState(draft.id));
+      this.renderOpenAIFields(providerFields, draft, this.getPresetSecretState(draft.id, 'openai'));
+    } else if (draft.provider === 'gemini') {
+      this.renderGeminiFields(providerFields, draft, this.getPresetSecretState(draft.id, 'gemini'));
     } else {
       this.renderLocalFields(providerFields, draft);
     }
@@ -491,7 +542,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     const descEl = apiKeySetting.descEl;
     descEl.empty();
     descEl.createSpan({ text: 'OpenAI API key used for this preset.' });
-    for (const line of this.describeSecretStorageLines(draft.id)) {
+    for (const line of this.describeSecretStorageLines(draft.id, 'openai')) {
       descEl.createEl('br');
       descEl.createSpan({ text: line });
     }
@@ -555,6 +606,67 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
     this.renderPromptTextarea(container, draft.openAI.promptTemplate, (value) => {
       draft.openAI.promptTemplate = value;
+    });
+  }
+
+  private renderGeminiFields(container: HTMLElement, draft: LLMPreset, secretState: PresetSecretState) {
+    const apiKeySetting = new Setting(container).setName('API key');
+    apiKeySetting.setDesc('');
+    const descEl = apiKeySetting.descEl;
+    descEl.empty();
+    descEl.createSpan({ text: 'Gemini API key used for this preset.' });
+    for (const line of this.describeSecretStorageLines(draft.id, 'gemini')) {
+      descEl.createEl('br');
+      descEl.createSpan({ text: line });
+    }
+    apiKeySetting.addText((text) => {
+        const placeholder = '••••••••';
+        const canShowPlaceholder = secretState.hasSecret && !secretState.cleared && !secretState.dirty && !draft.gemini.apiKey;
+        let showingPlaceholder = false;
+        text.setPlaceholder('AIza...');
+        if (canShowPlaceholder) {
+          text.setValue(placeholder);
+          showingPlaceholder = true;
+        } else {
+          text.setValue(draft.gemini.apiKey);
+        }
+        text.onChange((value) => {
+          if (showingPlaceholder) {
+            return;
+          }
+          const trimmed = value.trim();
+          draft.gemini.apiKey = trimmed;
+          secretState.dirty = true;
+          secretState.cleared = trimmed.length === 0;
+        });
+        text.inputEl.type = 'password';
+        text.inputEl.autocomplete = 'off';
+        text.inputEl.addEventListener('focus', () => {
+          if (showingPlaceholder) {
+            showingPlaceholder = false;
+            text.setValue('');
+          }
+        });
+        text.inputEl.addEventListener('blur', () => {
+          if (!secretState.dirty && secretState.hasSecret && !secretState.cleared && !text.inputEl.value) {
+            showingPlaceholder = true;
+            text.setValue(placeholder);
+          }
+        });
+      });
+
+    new Setting(container)
+      .setName('Model')
+      .addText((text) =>
+        text
+          .setValue(draft.gemini.model)
+          .onChange((value) => {
+            draft.gemini.model = value.trim();
+          }),
+      );
+
+    this.renderPromptTextarea(container, draft.gemini.promptTemplate, (value) => {
+      draft.gemini.promptTemplate = value;
     });
   }
 
@@ -643,7 +755,8 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   }
 
   private describePreset(preset: LLMPreset): string {
-    return `Provider: ${preset.provider === 'openai' ? 'OpenAI' : 'Local'} • Mode: ${preset.generationMode === 'stream' ? 'Streaming' : 'Batch'}`;
+    const providerLabel = preset.provider === 'openai' ? 'OpenAI' : preset.provider === 'gemini' ? 'Gemini' : 'Local';
+    return `Provider: ${providerLabel} • Mode: ${preset.generationMode === 'stream' ? 'Streaming' : 'Batch'}`;
   }
 
   private getDefaultOutputFolder(label: string) {
@@ -658,6 +771,93 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     return this.sourceDrafts.get(id)!;
   }
 
+  private getDefaultLabelForType(type: SourceType, position = 1): string {
+    const normalized = this.normalizeSourceType(type);
+    const base = normalized === 'dropzone' ? DEFAULT_DROPZONE_LABEL : DEFAULT_SOURCE_LABEL;
+    return this.buildAutoLabel(base, position);
+  }
+
+  private isAutoLabel(source: SourceConfig): boolean {
+    const stored = this.autoLabelStates.get(source.id);
+    if (stored !== undefined) {
+      return stored;
+    }
+    const baseLabel = this.normalizeSourceType(source.type ?? 'filesystem') === 'dropzone'
+      ? DEFAULT_DROPZONE_LABEL
+      : DEFAULT_SOURCE_LABEL;
+    const auto = this.matchesLabelPattern(source.label, baseLabel);
+    this.autoLabelStates.set(source.id, auto);
+    return auto;
+  }
+
+  private setAutoLabelState(sourceId: string, isAuto: boolean) {
+    this.autoLabelStates.set(sourceId, isAuto);
+  }
+
+  private buildAutoLabel(base: string, position: number): string {
+    const normalizedPosition = Math.max(1, position);
+    return `${base} ${normalizedPosition}`;
+  }
+
+  private normalizeSourceType(type?: SourceType): SourceType {
+    return type === 'dropzone' ? 'dropzone' : 'filesystem';
+  }
+
+  private countSourcesOfType(type: SourceType, excludeId?: string): number {
+    const normalized = this.normalizeSourceType(type);
+    return this.plugin.settings.sources.reduce((total, source) => {
+      if (source.id === excludeId) {
+        return total;
+      }
+      return this.normalizeSourceType(source.type) === normalized ? total + 1 : total;
+    }, 0);
+  }
+
+  private matchesLabelPattern(label: string, base: string): boolean {
+    return this.parseAutoLabelNumber(label, base) !== null;
+  }
+
+  private parseAutoLabelNumber(label: string, base: string): number | null {
+    const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`^${escaped}(?:\\s+(\\d+))?$`, 'i');
+    const match = label.trim().match(pattern);
+    if (!match) {
+      return null;
+    }
+    if (!match[1]) {
+      return 1;
+    }
+    const parsed = Number.parseInt(match[1], 10);
+    return Number.isNaN(parsed) ? 1 : parsed;
+  }
+
+  private matchesDefaultOutputFolderValue(value: string | undefined, label: string): boolean {
+    return (value ?? '').trim() === this.getDefaultOutputFolder(label);
+  }
+
+  private maybeSyncOutputFolder(draft: SourceConfig, previousLabel: string) {
+    if (this.matchesDefaultOutputFolderValue(draft.outputFolder, previousLabel)) {
+      draft.outputFolder = this.getDefaultOutputFolder(draft.label);
+    }
+  }
+
+  private getAutoLabelPositionFor(source: SourceConfig, overrideType?: SourceType): number {
+    const type = this.normalizeSourceType(overrideType ?? source.type);
+    const base = type === 'dropzone' ? DEFAULT_DROPZONE_LABEL : DEFAULT_SOURCE_LABEL;
+    if (!overrideType || this.normalizeSourceType(source.type) === type) {
+      const currentNumber = this.parseAutoLabelNumber(source.label, base);
+      if (currentNumber) {
+        return currentNumber;
+      }
+    }
+    const count = this.countSourcesOfType(type, source.id);
+    return count + 1;
+  }
+
+  private addSettingsDivider(container: HTMLElement) {
+    container.createDiv({ cls: 'ink2md-setting-divider' });
+  }
+
   private getPresetDraft(id: string, preset: LLMPreset): LLMPreset {
     if (!this.presetDrafts.has(id)) {
       this.presetDrafts.set(id, this.clonePreset(preset));
@@ -665,15 +865,27 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     return this.presetDrafts.get(id)!;
   }
 
-  private getPresetSecretState(id: string): PresetSecretState {
-    if (!this.presetSecretStates.has(id)) {
-      this.presetSecretStates.set(id, {
-        hasSecret: this.plugin.hasOpenAISecret(id),
+  private getPresetSecretState(id: string, provider: 'openai' | 'gemini'): PresetSecretState {
+    const key = this.getSecretStateKey(id, provider);
+    if (!this.presetSecretStates.has(key)) {
+      const hasSecret = provider === 'openai' ? this.plugin.hasOpenAISecret(id) : this.plugin.hasGeminiSecret(id);
+      this.presetSecretStates.set(key, {
+        hasSecret,
         dirty: false,
         cleared: false,
       });
     }
-    return this.presetSecretStates.get(id)!;
+    return this.presetSecretStates.get(key)!;
+  }
+
+  private getSecretStateKey(id: string, provider: 'openai' | 'gemini'): string {
+    return `${id}:${provider}`;
+  }
+
+  private clearPresetSecretStates(id: string) {
+    for (const provider of ['openai', 'gemini'] as const) {
+      this.presetSecretStates.delete(this.getSecretStateKey(id, provider));
+    }
   }
 
   private async clearSourceCache(sourceId: string) {
@@ -750,8 +962,9 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     }
     this.plugin.settings.llmPresets = this.plugin.settings.llmPresets.filter((preset) => preset.id !== presetId);
     this.presetDrafts.delete(presetId);
-    this.presetSecretStates.delete(presetId);
+    this.clearPresetSecretStates(presetId);
     await this.plugin.deleteOpenAISecret(presetId);
+    await this.plugin.deleteGeminiSecret(presetId);
     await this.plugin.saveSettings();
     this.display();
   }
@@ -784,22 +997,52 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     }
     const index = this.plugin.settings.llmPresets.findIndex((entry) => entry.id === presetId);
     if (index >= 0) {
-      const secretState = this.getPresetSecretState(presetId);
+      const openAISecretState = this.getPresetSecretState(presetId, 'openai');
+      const geminiSecretState = this.getPresetSecretState(presetId, 'gemini');
       const clone = this.clonePreset(draft);
       const supportsSecretStorage = this.plugin.supportsSecretStorage();
       if (clone.provider === 'openai') {
         const input = draft.openAI.apiKey?.trim() ?? '';
-        const shouldUpdateSecret = secretState.dirty && !secretState.cleared && input.length > 0;
-        const shouldClearSecret = secretState.dirty && secretState.cleared;
+        const shouldUpdateSecret = openAISecretState.dirty && !openAISecretState.cleared && input.length > 0;
+        const shouldClearSecret = openAISecretState.dirty && openAISecretState.cleared;
         if (shouldUpdateSecret) {
           await this.plugin.setOpenAISecret(clone.id, input);
+          openAISecretState.hasSecret = true;
         } else if (shouldClearSecret) {
           await this.plugin.setOpenAISecret(clone.id, '');
+          openAISecretState.hasSecret = false;
         }
         clone.openAI.apiKey = supportsSecretStorage ? '' : input;
+        openAISecretState.dirty = false;
+        openAISecretState.cleared = false;
       } else {
         await this.plugin.deleteOpenAISecret(clone.id);
         clone.openAI.apiKey = '';
+        openAISecretState.hasSecret = false;
+        openAISecretState.dirty = false;
+        openAISecretState.cleared = false;
+      }
+
+      if (clone.provider === 'gemini') {
+        const input = draft.gemini.apiKey?.trim() ?? '';
+        const shouldUpdateSecret = geminiSecretState.dirty && !geminiSecretState.cleared && input.length > 0;
+        const shouldClearSecret = geminiSecretState.dirty && geminiSecretState.cleared;
+        if (shouldUpdateSecret) {
+          await this.plugin.setGeminiSecret(clone.id, input);
+          geminiSecretState.hasSecret = true;
+        } else if (shouldClearSecret) {
+          await this.plugin.setGeminiSecret(clone.id, '');
+          geminiSecretState.hasSecret = false;
+        }
+        clone.gemini.apiKey = supportsSecretStorage ? '' : input;
+        geminiSecretState.dirty = false;
+        geminiSecretState.cleared = false;
+      } else {
+        await this.plugin.deleteGeminiSecret(clone.id);
+        clone.gemini.apiKey = '';
+        geminiSecretState.hasSecret = false;
+        geminiSecretState.dirty = false;
+        geminiSecretState.cleared = false;
       }
       this.plugin.settings.llmPresets[index] = clone;
     }
@@ -832,7 +1075,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   private collapsePreset(id: string) {
     this.expandedPresets.delete(id);
     this.presetDrafts.delete(id);
-    this.presetSecretStates.delete(id);
+    this.clearPresetSecretStates(id);
     this.display();
   }
 
@@ -928,11 +1171,11 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     slider.sliderEl.insertAdjacentElement('afterend', valueEl);
   }
 
-  private describeSecretStorageLines(presetId: string): string[] {
+  private describeSecretStorageLines(presetId: string, provider: 'openai' | 'gemini'): string[] {
     if (!this.plugin.supportsSecretStorage()) {
       return ["Stored with plugin settings because Obsidian's keychain isn't available in this Obsidian build."];
     }
-    const secretId = this.plugin.getPresetSecretId(presetId);
+    const secretId = this.plugin.getPresetSecretId(presetId, provider);
     if (secretId) {
       return ["Stored securely in Obsidian's keychain.", `ID: ${secretId}`];
     }

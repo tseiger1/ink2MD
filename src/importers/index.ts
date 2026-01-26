@@ -3,7 +3,6 @@ import type { Stats } from 'fs';
 import { NoteSource, SourceConfig } from '../types';
 import { collectImageSources } from './imageImporter';
 import { collectPdfSources } from './pdfImporter';
-import { collectSupernoteSources } from './supernoteImporter';
 
 async function isDirectory(pathStr: string): Promise<boolean> {
   let stats: Stats;
@@ -40,10 +39,6 @@ export async function discoverNoteSourcesForConfig(config: SourceConfig): Promis
 
 	if (config.includePdfs) {
 		sources.push(...await collectPdfSources(normalizedConfig));
-	}
-
-	if (config.includeSupernote) {
-		sources.push(...await collectSupernoteSources(normalizedConfig));
 	}
 
 	return sources;

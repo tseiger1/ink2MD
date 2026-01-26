@@ -1,4 +1,4 @@
-export type InputFormat = 'image' | 'pdf' | 'supernote';
+export type InputFormat = 'image' | 'pdf';
 
 export type SourceType = 'filesystem' | 'dropzone';
 
@@ -45,7 +45,13 @@ export interface LocalProviderSettings {
 	imageDetail: 'low' | 'high';
 }
 
-export type LLMProvider = 'openai' | 'local';
+export interface GeminiProviderSettings {
+	apiKey: string;
+	model: string;
+	promptTemplate: string;
+}
+
+export type LLMProvider = 'openai' | 'local' | 'gemini';
 export type LLMGenerationMode = 'batch' | 'stream';
 
 export interface LLMPreset {
@@ -56,6 +62,7 @@ export interface LLMPreset {
 	llmMaxWidth: number;
 	openAI: OpenAIProviderSettings;
 	local: LocalProviderSettings;
+	gemini: GeminiProviderSettings;
 }
 
 export interface SourceConfig {
@@ -66,7 +73,6 @@ export interface SourceConfig {
 	recursive: boolean;
 	includeImages: boolean;
 	includePdfs: boolean;
-	includeSupernote: boolean;
 	attachmentMaxWidth: number;
 	pdfDpi: number;
 	replaceExisting: boolean;
@@ -74,6 +80,7 @@ export interface SourceConfig {
 	openGeneratedNotes: boolean;
 	openInNewLeaf: boolean;
 	llmPresetId: string | null;
+	preImportScript?: string;
 }
 
 export interface ProcessedSourceInfo {
@@ -89,7 +96,7 @@ export interface Ink2MDSettings {
 	sources: SourceConfig[];
 	llmPresets: LLMPreset[];
 	processedSources: Record<string, ProcessedSourceInfo>;
-	secretBindings: Record<string, string>;
+	secretBindings: Record<string, Record<string, string>>;
 }
 
 export interface MarkdownGenerationContext {
