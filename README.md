@@ -16,19 +16,12 @@ Ink2MD is an Obsidian plugin that brings handwritten notebooks into your vault. 
 
 ## Configuration
 Open **Settings → Community plugins → Ink2MD** and adjust:
-- Input directories: absolute OS paths; sub-folders are scanned automatically.
-- Output folder: vault-relative folder where PNG files and Markdown live.
-- Formats: toggle image, PDF, and e-ink discovery modules.
-- Conversion: pick separate PNG width caps for files stored in the vault and for the LLM payloads (set a slider to 0 to keep originals) plus a dedicated DPI value for PDF rasterization.
-- Replacement: enable “Replace existing notes” to overwrite previous imports instead of creating timestamped folders, and reset the processed-file cache when you want to force a re-import.
-- Open generated notes: optionally focus each Markdown file as it is written—useful to watch streaming output.
-- LLM provider:
-  - **OpenAI**: add your API key, preferred vision-capable model, and prompt template.
-  - **Local**: specify the endpoint URL (must speak the OpenAI Chat Completions protocol), optional API key, model name, and prompt. Ollama works well out of the box when exposing its OpenAI-compatible server with the `mistral-small:3.1` model.
-- Generation mode: pick **Batch** (default, writes once per note) or **Streaming** to write Markdown tokens directly into the file while the LLM responds.
+- **Sources**: each source points at one or more absolute directories, controls which import types (images, PDFs, Supernote) run, holds conversion options (PNG width, PDF DPI, overwrite policy), and decides whether generated notes open automatically. Every source links to exactly one LLM preset.
+- **LLM presets**: reusable provider profiles containing OpenAI credentials or local endpoint details, prompt templates, image detail, model name, image-width limits, and whether generation streams live or waits for the full response. Ollama works well out of the box when exposing its OpenAI-compatible server with the `mistral-small:3.1` model.
+- **Processed files cache**: clear it globally from the Sources section or per source if you need to force a re-import.
 
 ## Usage
-1. Populate the input directory list with folders that contain your handwritten exports.
+1. Add one or more sources that point at the folders containing your handwritten exports.
 2. Use the ribbon icon or run the `Ink2MD: Import handwritten notes` command.
 3. Wait for notices indicating scanning, conversion, and generation progress.
 4. Inspect the output folder in your vault—each imported note has its own sub-folder containing the generated PNG pages and Markdown file.

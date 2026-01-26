@@ -1,4 +1,4 @@
-import { ConvertedNote, Ink2MDSettings, MarkdownStreamHandler } from '../types';
+import { ConvertedNote, LLMPreset, MarkdownStreamHandler } from '../types';
 import { OpenAIVisionProvider } from './openaiProvider';
 import { LocalVisionProvider } from './localProvider';
 
@@ -16,12 +16,12 @@ export class LLMService {
 	private provider: VisionProvider;
 	private llmMaxWidth: number;
 
-	constructor(settings: Ink2MDSettings) {
-		this.llmMaxWidth = settings.llmMaxWidth;
-		if (settings.llmProvider === 'openai') {
-			this.provider = new OpenAIVisionProvider(settings.openAI);
+	constructor(preset: LLMPreset) {
+		this.llmMaxWidth = preset.llmMaxWidth;
+		if (preset.provider === 'openai') {
+			this.provider = new OpenAIVisionProvider(preset.openAI);
 		} else {
-			this.provider = new LocalVisionProvider(settings.local);
+			this.provider = new LocalVisionProvider(preset.local);
 		}
 	}
 

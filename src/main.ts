@@ -8,8 +8,10 @@ import type {
 	NoteSource,
 	ProcessedSourceInfo,
 	ImageEmbed,
+	SourceConfig,
+	LLMPreset,
 } from './types';
-import { discoverNoteSources } from './importers';
+import { discoverNoteSourcesForConfig } from './importers';
 import { convertSourceToPng } from './conversion';
 import { LLMService } from './llm';
 import { buildMarkdown, buildFrontMatter, buildPagesSection } from './markdown/generator';
@@ -17,11 +19,21 @@ import { hashFile } from './utils/hash';
 
 const OPENAI_SECRET_ID = 'ink2md-openai-api-key';
 
-type SourceFingerprint = Omit<ProcessedSourceInfo, 'processedAt' | 'outputFolder'>;
+type SourceFingerprint = {
+	hash: string;
+	size: number;
+	mtimeMs: number;
+};
 interface FreshnessResult {
 	shouldProcess: boolean;
 	fingerprint?: SourceFingerprint;
 	previousFolder?: string;
+}
+
+interface ImportJob {
+	note: NoteSource;
+	sourceConfig: SourceConfig;
+	preset: LLMPreset;
 }
 
 	export default class Ink2MDPlugin extends Plugin {
@@ -32,7 +44,7 @@ interface FreshnessResult {
 	private cancelRequested = false;
 	private abortController: AbortController | null = null;
 	private pendingSpinnerStop = false;
-	private openAISecret: string | null = null;
+	private openAISecrets: Record<string, string | null> = {};
 
   async onload() {
     await this.loadSettings();
@@ -65,8 +77,9 @@ interface FreshnessResult {
 
     let finalStatus = 'Idle';
     try {
-		if (!this.settings.inputDirectories.length) {
-			new Notice('Ink2MD: configure at least one input directory.');
+		const jobs = await this.collectImportJobs();
+		if (!jobs.length) {
+			new Notice('Ink2MD: no sources are ready to import. Configure at least one source with directories and an LLM preset.');
 			finalStatus = 'Configuration required';
 			this.setStatus(finalStatus);
 			return;
@@ -74,37 +87,13 @@ interface FreshnessResult {
 
 		new Notice('Ink2MD: scanning input directories...');
 		this.setStatus('Scanning for handwritten notes...');
-		const sources = await discoverNoteSources(this.settings);
-
-		if (!sources.length) {
-			new Notice('Ink2MD: no new handwritten files found.');
-			finalStatus = 'No sources found';
-			this.setStatus(finalStatus);
-			return;
-		}
-
-      let llm: LLMService;
-		try {
-			llm = new LLMService(this.getRuntimeSettingsWithSecrets());
-		} catch (error) {
-			console.error(error);
-			new Notice('Ink2MD: unable to initialize the selected LLM provider.');
-			finalStatus = 'LLM initialization failed';
-			this.setStatus(finalStatus);
-			return;
-		}
-
-		if (this.settings.llmProvider === 'openai' && !this.getOpenAISecret()) {
-			new Notice('Ink2MD: add your OpenAI API key in the plugin settings before running an import.');
-			finalStatus = 'Configuration required';
-			this.setStatus(finalStatus);
-			return;
-		}
-
-		const shouldStream = this.settings.llmGenerationMode === 'stream';
+		const llmCache = new Map<string, LLMService>();
 		let processed = 0;
 		let cancelled = false;
-		for (const source of sources) {
+		for (const job of jobs) {
+			const source = job.note;
+			const preset = job.preset;
+			const sourceConfig = job.sourceConfig;
 			if (this.cancelRequested) {
 				cancelled = true;
 				break;
@@ -115,48 +104,62 @@ interface FreshnessResult {
 				continue;
 			}
 
-			const reusePath = this.settings.replaceExisting ? freshness.previousFolder : undefined;
+			const reusePath = sourceConfig.replaceExisting ? freshness.previousFolder : undefined;
 
-			this.setStatus(`Processing ${processed + 1}/${sources.length}: ${source.basename}`);
+			this.setStatus(`Processing ${processed + 1}/${jobs.length}: ${source.basename}`);
 			const converted = await convertSourceToPng(source, {
-				attachmentMaxWidth: this.settings.attachmentMaxWidth,
-				pdfDpi: this.settings.pdfDpi,
+				attachmentMaxWidth: sourceConfig.attachmentMaxWidth,
+				pdfDpi: sourceConfig.pdfDpi,
 			});
 			if (!converted) {
 				continue;
 			}
 
-			const folderPath = await this.ensureNoteFolder(converted.source, reusePath);
+			const folderPath = await this.ensureNoteFolder(converted.source, sourceConfig, reusePath);
 
 			if (this.cancelRequested) {
 				cancelled = true;
 				break;
 			}
 
-		this.setStatus(`Reading handwriting ${processed + 1}/${sources.length}`);
-		let streamFailed = false;
-		if (shouldStream) {
-			try {
-				await this.streamMarkdownContent(converted, folderPath, llm, this.abortController?.signal);
-			} catch (error) {
-				if (this.cancelRequested && this.abortController?.signal?.aborted) {
+			const llm = this.getOrCreateLLMService(preset, llmCache);
+			const shouldStream = preset.generationMode === 'stream';
+			this.setStatus(`Reading handwriting ${processed + 1}/${jobs.length}`);
+			let streamFailed = false;
+			if (shouldStream) {
+				try {
+					await this.streamMarkdownContent(converted, folderPath, sourceConfig, llm, this.abortController?.signal);
+				} catch (error) {
+					if (this.cancelRequested && this.abortController?.signal?.aborted) {
+						cancelled = true;
+						break;
+					}
+					console.error('[ink2md] Failed to stream markdown', error);
+					streamFailed = true;
+				}
+			} else {
+				let llmMarkdown = '';
+				try {
+					llmMarkdown = await llm.generateMarkdown(converted, this.abortController?.signal);
+				} catch (error) {
+					if (this.cancelRequested && this.abortController?.signal?.aborted) {
+						cancelled = true;
+						break;
+					}
+					console.error('[ink2md] Failed to generate markdown', error);
+					llmMarkdown = '_LLM generation failed._';
+				}
+
+				if (this.cancelRequested) {
 					cancelled = true;
 					break;
 				}
-				console.error('[ink2md] Failed to stream markdown', error);
-				streamFailed = true;
-			}
-		} else {
-			let llmMarkdown = '';
-			try {
-				llmMarkdown = await llm.generateMarkdown(converted, this.abortController?.signal);
-			} catch (error) {
-				if (this.cancelRequested && this.abortController?.signal?.aborted) {
-					cancelled = true;
-					break;
-				}
-				console.error('[ink2md] Failed to generate markdown', error);
-				llmMarkdown = '_LLM generation failed._';
+
+				this.setStatus(`Writing note ${processed + 1}/${jobs.length}`);
+				await this.persistNote(converted, llmMarkdown, sourceConfig, folderPath);
+				await this.rememberProcessedSource(source, freshness.fingerprint, folderPath, sourceConfig);
+				processed += 1;
+				continue;
 			}
 
 			if (this.cancelRequested) {
@@ -164,26 +167,14 @@ interface FreshnessResult {
 				break;
 			}
 
-			this.setStatus(`Writing note ${processed + 1}/${sources.length}`);
-			await this.persistNote(converted, llmMarkdown, folderPath);
-			await this.rememberProcessedSource(source, freshness.fingerprint, folderPath);
-			processed += 1;
-			continue;
-		}
-
-			if (this.cancelRequested) {
-				cancelled = true;
-				break;
-			}
-
-		this.setStatus(`Writing note ${processed + 1}/${sources.length}`);
+			this.setStatus(`Writing note ${processed + 1}/${jobs.length}`);
 			const imageEmbeds = await this.writeAttachments(converted, folderPath);
 			if (streamFailed) {
-				await this.writeMarkdownFile(converted, folderPath, '_LLM generation failed._', imageEmbeds);
+				await this.writeMarkdownFile(converted, folderPath, sourceConfig, '_LLM generation failed._', imageEmbeds);
 			} else {
-				await this.appendPagesSection(converted, folderPath, imageEmbeds);
+				await this.appendPagesSection(converted, folderPath, sourceConfig, imageEmbeds);
 			}
-			await this.rememberProcessedSource(source, freshness.fingerprint, folderPath);
+			await this.rememberProcessedSource(source, freshness.fingerprint, folderPath, sourceConfig);
 			processed += 1;
 		}
 
@@ -201,15 +192,86 @@ interface FreshnessResult {
     }
   }
 
-	private async persistNote(note: ConvertedNote, llmMarkdown: string, targetFolder?: string) {
-		const folderPath = targetFolder ?? (await this.ensureNoteFolder(note.source));
+	private async collectImportJobs(): Promise<ImportJob[]> {
+		const jobs: ImportJob[] = [];
+		const sources = this.settings.sources ?? [];
+		if (!sources.length) {
+			return jobs;
+		}
+
+		for (const sourceConfig of sources) {
+			if (sourceConfig.type !== 'filesystem') {
+				console.warn(`[ink2md] Unsupported source type ${sourceConfig.type} for ${sourceConfig.label}`);
+				continue;
+			}
+			if (!sourceConfig.directories.length) {
+				new Notice(`Ink2MD: source "${sourceConfig.label}" has no directories configured.`);
+				continue;
+			}
+			if (!sourceConfig.llmPresetId) {
+				new Notice(`Ink2MD: source "${sourceConfig.label}" is missing an LLM preset.`);
+				continue;
+			}
+			const preset = this.getRuntimePreset(sourceConfig.llmPresetId);
+			if (!preset) {
+				new Notice(`Ink2MD: preset linked to "${sourceConfig.label}" was not found.`);
+				continue;
+			}
+			if (preset.provider === 'openai' && !preset.openAI.apiKey) {
+				new Notice(`Ink2MD: preset "${preset.label}" requires an OpenAI API key.`);
+				continue;
+			}
+			const notes = await discoverNoteSourcesForConfig(sourceConfig);
+			for (const note of notes) {
+				jobs.push({ note, sourceConfig, preset });
+			}
+		}
+
+		return jobs;
+	}
+
+	private getOrCreateLLMService(preset: LLMPreset, cache: Map<string, LLMService>): LLMService {
+		let service = cache.get(preset.id);
+		if (!service) {
+			service = new LLMService(preset);
+			cache.set(preset.id, service);
+		}
+		return service;
+	}
+
+	private getRuntimePreset(presetId: string): LLMPreset | null {
+		const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+		if (!preset) {
+			return null;
+		}
+		const apiKey = preset.provider === 'openai' ? this.getOpenAISecret(preset.id) || preset.openAI.apiKey : preset.openAI.apiKey;
+		return {
+			...preset,
+			openAI: {
+				...preset.openAI,
+				apiKey: apiKey ?? '',
+			},
+			local: {
+				...preset.local,
+			},
+		};
+	}
+
+	private async persistNote(
+		note: ConvertedNote,
+		llmMarkdown: string,
+		sourceConfig: SourceConfig,
+		targetFolder?: string,
+	) {
+		const folderPath = targetFolder ?? (await this.ensureNoteFolder(note.source, sourceConfig));
 		const imageEmbeds = await this.writeAttachments(note, folderPath);
-		await this.writeMarkdownFile(note, folderPath, llmMarkdown, imageEmbeds);
+		await this.writeMarkdownFile(note, folderPath, sourceConfig, llmMarkdown, imageEmbeds);
 	}
 
 	private async streamMarkdownContent(
 		note: ConvertedNote,
 		folderPath: string,
+		sourceConfig: SourceConfig,
 		llm: LLMService,
 		signal?: AbortSignal,
 	) {
@@ -219,7 +281,7 @@ interface FreshnessResult {
 			await adapter.remove(markdownPath);
 		}
 		await adapter.write(markdownPath, `${buildFrontMatter(note)}\n\n`);
-		await this.maybeOpenGeneratedNote(note, folderPath);
+		await this.maybeOpenGeneratedNote(note, folderPath, sourceConfig);
 		await llm.streamMarkdown(
 			note,
 			async (chunk) => {
@@ -232,15 +294,22 @@ interface FreshnessResult {
 		);
 	}
 
-	private async appendPagesSection(note: ConvertedNote, folderPath: string, imageEmbeds: ImageEmbed[]) {
+	private async appendPagesSection(
+		note: ConvertedNote,
+		folderPath: string,
+		sourceConfig: SourceConfig,
+		imageEmbeds: ImageEmbed[],
+	) {
 		const adapter = this.app.vault.adapter;
 		const markdownPath = this.getMarkdownPath(note, folderPath);
 		await adapter.append(markdownPath, `\n\n${buildPagesSection(imageEmbeds)}`);
+		await this.maybeOpenGeneratedNote(note, folderPath, sourceConfig);
 	}
 
 	private async writeMarkdownFile(
 		note: ConvertedNote,
 		folderPath: string,
+		sourceConfig: SourceConfig,
 		llmMarkdown: string,
 		imageEmbeds: ImageEmbed[],
 	) {
@@ -251,7 +320,7 @@ interface FreshnessResult {
 			await adapter.remove(markdownPath);
 		}
 		await adapter.write(markdownPath, markdown);
-		await this.maybeOpenGeneratedNote(note, folderPath);
+		await this.maybeOpenGeneratedNote(note, folderPath, sourceConfig);
 	}
 
 	private async writeAttachments(note: ConvertedNote, folderPath: string): Promise<ImageEmbed[]> {
@@ -269,15 +338,15 @@ interface FreshnessResult {
 		return normalizePath(`${folderPath}/${note.source.basename}.md`);
 	}
 
-	private async maybeOpenGeneratedNote(note: ConvertedNote, folderPath: string) {
-		if (!this.settings.openGeneratedNotes) {
+	private async maybeOpenGeneratedNote(note: ConvertedNote, folderPath: string, sourceConfig: SourceConfig) {
+		if (!sourceConfig.openGeneratedNotes) {
 			return;
 		}
 		const file = this.app.vault.getAbstractFileByPath(this.getMarkdownPath(note, folderPath));
 		if (!(file instanceof TFile)) {
 			return;
 		}
-		const leaf = this.app.workspace.getLeaf(true);
+		const leaf = this.app.workspace.getLeaf(sourceConfig.openInNewLeaf);
 		await leaf.openFile(file);
 	}
 
@@ -403,7 +472,12 @@ interface FreshnessResult {
 		};
 	}
 
-	private async rememberProcessedSource(source: NoteSource, fingerprint?: SourceFingerprint, folderPath?: string) {
+	private async rememberProcessedSource(
+		source: NoteSource,
+		fingerprint?: SourceFingerprint,
+		folderPath?: string,
+		_sourceConfig?: SourceConfig,
+	) {
 		const store = this.ensureProcessedStore();
 		const finalFingerprint = fingerprint ?? (await this.computeFingerprint(source));
 		if (!finalFingerprint) {
@@ -415,6 +489,7 @@ interface FreshnessResult {
 			...finalFingerprint,
 			processedAt: new Date().toISOString(),
 			outputFolder,
+			sourceId: source.sourceId,
 		};
 		await this.saveSettings();
 	}
@@ -467,19 +542,19 @@ interface FreshnessResult {
 		await this.app.vault.adapter.mkdir(folderPath);
 	}
 
-	private async ensureNoteFolder(source: NoteSource, reusePath?: string): Promise<string> {
+	private async ensureNoteFolder(source: NoteSource, sourceConfig: SourceConfig, reusePath?: string): Promise<string> {
 		const adapter = this.app.vault.adapter;
 		if (reusePath) {
 			const normalizedReuse = normalizePath(reusePath);
 			if (await adapter.exists(normalizedReuse)) {
-				if (this.settings.replaceExisting) {
+				if (sourceConfig.replaceExisting) {
 					await this.resetFolder(normalizedReuse);
 				}
 				return normalizedReuse;
 			}
 		}
 
-		const root = this.resolveOutputRoot();
+		const root = this.resolveOutputRoot(sourceConfig);
 		const relativeFolder = this.sanitizeRelativeFolder(source.relativeFolder);
 		const baseFolder = this.joinPaths(root, relativeFolder);
 		if (baseFolder) {
@@ -490,7 +565,7 @@ interface FreshnessResult {
 		let candidate = buildCandidate(source.basename);
 		let counter = 1;
 		while (candidate && (await adapter.exists(candidate))) {
-			if (this.settings.replaceExisting) {
+			if (sourceConfig.replaceExisting) {
 				await this.resetFolder(candidate);
 				return candidate;
 			}
@@ -505,8 +580,8 @@ interface FreshnessResult {
 		return candidate;
 	}
 
-	private resolveOutputRoot(): string {
-		const configured = (this.settings.outputFolder ?? '').trim();
+	private resolveOutputRoot(sourceConfig: SourceConfig): string {
+		const configured = (sourceConfig.outputFolder ?? '').trim();
 		if (!configured) {
 			return normalizePath('Ink2MD');
 		}
@@ -555,19 +630,6 @@ interface FreshnessResult {
 		}
 	}
 
-	private getRuntimeSettingsWithSecrets(): Ink2MDSettings {
-		if (this.settings.llmProvider !== 'openai') {
-			return this.settings;
-		}
-		return {
-			...this.settings,
-			openAI: {
-				...this.settings.openAI,
-				apiKey: this.getOpenAISecret(),
-			},
-		};
-	}
-
 	private getSecretStorage(): SecretStorage | null {
 		const storage = this.app?.secretStorage;
 		if (!storage) {
@@ -583,13 +645,18 @@ interface FreshnessResult {
 		return this.getSecretStorage() !== null;
 	}
 
-	private readOpenAISecretFromStore(): string | null {
+	private buildSecretId(presetId: string): string {
+		return `${OPENAI_SECRET_ID}:${presetId}`;
+	}
+
+	private readOpenAISecretFromStore(presetId: string): string | null {
 		const storage = this.getSecretStorage();
 		if (!storage) {
-			return this.settings.openAI.apiKey?.trim() || null;
+			const preset = this.settings.llmPresets.find((p) => p.id === presetId);
+			return preset?.openAI.apiKey?.trim() || null;
 		}
 		try {
-			const secret = storage.getSecret(OPENAI_SECRET_ID);
+			const secret = storage.getSecret(this.buildSecretId(presetId));
 			return secret && secret.trim().length > 0 ? secret.trim() : null;
 		} catch (error) {
 			console.warn('[ink2md] Unable to read OpenAI API key from secret storage.', error);
@@ -597,90 +664,255 @@ interface FreshnessResult {
 		}
 	}
 
-	getOpenAISecret(): string {
-		if (this.openAISecret && this.openAISecret.length > 0) {
-			return this.openAISecret;
+	getOpenAISecret(presetId: string): string {
+		const cached = this.openAISecrets[presetId];
+		if (cached && cached.length > 0) {
+			return cached;
 		}
-		const secret = this.readOpenAISecretFromStore();
-		this.openAISecret = secret;
+		const secret = this.readOpenAISecretFromStore(presetId);
+		this.openAISecrets[presetId] = secret;
 		return secret ?? '';
 	}
 
-	async setOpenAISecret(value: string) {
+	async setOpenAISecret(presetId: string, value: string) {
 		const trimmed = value.trim();
-		this.openAISecret = trimmed.length > 0 ? trimmed : null;
+		this.openAISecrets[presetId] = trimmed.length > 0 ? trimmed : null;
 		const storage = this.getSecretStorage();
 		if (storage) {
 			try {
-				storage.setSecret(OPENAI_SECRET_ID, this.openAISecret ?? '');
+				storage.setSecret(this.buildSecretId(presetId), this.openAISecrets[presetId] ?? '');
 			} catch (error) {
 				console.error('[ink2md] Unable to persist OpenAI API key in secret storage.', error);
 			}
 			return;
 		}
-		this.settings.openAI.apiKey = this.openAISecret ?? '';
+		const preset = this.settings.llmPresets.find((p) => p.id === presetId);
+		if (preset) {
+			preset.openAI.apiKey = this.openAISecrets[presetId] ?? '';
+		}
 		await this.saveSettings();
 	}
 
 	async loadSettings() {
-		const stored = (await this.loadData()) as (Partial<Ink2MDSettings> & { maxImageWidth?: number }) | null;
-		const legacyOpenAIKey = stored?.openAI?.apiKey?.trim();
-		const attachmentMaxWidth = stored?.attachmentMaxWidth ?? stored?.maxImageWidth ?? DEFAULT_SETTINGS.attachmentMaxWidth;
-		const llmMaxWidth = stored?.llmMaxWidth ?? attachmentMaxWidth ?? DEFAULT_SETTINGS.llmMaxWidth;
-		const pdfDpi = stored?.pdfDpi ?? DEFAULT_SETTINGS.pdfDpi;
-		const processedSources = { ...(stored?.processedSources ?? DEFAULT_SETTINGS.processedSources) };
-		const replaceExisting = stored?.replaceExisting ?? DEFAULT_SETTINGS.replaceExisting;
-		this.settings = {
-		  ...DEFAULT_SETTINGS,
-		  ...(stored ?? {}),
-		  attachmentMaxWidth,
-		  llmMaxWidth,
-		  pdfDpi,
-		  includeSupernote: stored?.includeSupernote ?? DEFAULT_SETTINGS.includeSupernote,
-		  replaceExisting,
-		  openAI: {
-		    ...DEFAULT_SETTINGS.openAI,
-		    ...(stored?.openAI ?? {}),
-		    imageDetail: stored?.openAI?.imageDetail ?? DEFAULT_SETTINGS.openAI.imageDetail,
-		  },
-		  local: {
-		    ...DEFAULT_SETTINGS.local,
-		    ...(stored?.local ?? {}),
-		    imageDetail: stored?.local?.imageDetail ?? DEFAULT_SETTINGS.local.imageDetail,
-		  },
-		  processedSources,
-		} as Ink2MDSettings;
+		const stored = (await this.loadData()) as Partial<Ink2MDSettings> | null;
+		let normalized: { settings: Ink2MDSettings; openAIKeys: Record<string, string> };
+		if (!stored || !Array.isArray((stored as Ink2MDSettings).sources) || !Array.isArray((stored as Ink2MDSettings).llmPresets)) {
+			normalized = this.migrateLegacySettings(stored ?? {});
+		} else {
+			normalized = this.normalizeSettings(stored as Partial<Ink2MDSettings>);
+		}
+		this.settings = normalized.settings;
+		this.initializeOpenAISecrets(normalized.openAIKeys);
+	}
 
-		const secretStorage = this.getSecretStorage();
-		if (secretStorage) {
-			let migratedLegacyKey = false;
-			if (legacyOpenAIKey) {
-				try {
-					secretStorage.setSecret(OPENAI_SECRET_ID, legacyOpenAIKey);
-					migratedLegacyKey = true;
-				} catch (error) {
-					console.error('[ink2md] Unable to migrate stored OpenAI API key into secret storage.', error);
-				}
-			}
-			this.openAISecret = this.readOpenAISecretFromStore();
-			this.settings.openAI.apiKey = '';
-			if (migratedLegacyKey) {
-				await this.saveSettings();
+	async saveSettings() {
+		if (this.supportsSecretStorage()) {
+			for (const preset of this.settings.llmPresets) {
+				preset.openAI.apiKey = '';
 			}
 		} else {
-			this.openAISecret = legacyOpenAIKey && legacyOpenAIKey.length > 0 ? legacyOpenAIKey : null;
-			this.settings.openAI.apiKey = this.openAISecret ?? '';
+			for (const preset of this.settings.llmPresets) {
+				preset.openAI.apiKey = this.openAISecrets[preset.id] ?? '';
+			}
+		}
+		await this.saveData(this.settings);
+	}
+
+	private normalizeSettings(raw: Partial<Ink2MDSettings>): { settings: Ink2MDSettings; openAIKeys: Record<string, string> } {
+		const defaultPresetTemplate = DEFAULT_SETTINGS.llmPresets[0]!;
+		const defaultSourceTemplate = DEFAULT_SETTINGS.sources[0]!;
+		const rawPresets = Array.isArray(raw.llmPresets) && raw.llmPresets.length ? raw.llmPresets : DEFAULT_SETTINGS.llmPresets;
+		const presets: LLMPreset[] = rawPresets.map((preset, index) => this.normalizePreset(preset, defaultPresetTemplate, index));
+		if (!presets.length) {
+			presets.push(this.normalizePreset(undefined, defaultPresetTemplate, 0));
+		}
+		const presetIds = new Set(presets.map((preset) => preset.id));
+		const primaryPresetId = presets[0]!.id;
+		const rawSources = Array.isArray(raw.sources) && raw.sources.length ? raw.sources : DEFAULT_SETTINGS.sources;
+		const sources: SourceConfig[] = rawSources.map((source, index) =>
+			this.normalizeSource(source, defaultSourceTemplate, presetIds, primaryPresetId, index),
+		);
+		if (!sources.length) {
+			sources.push(this.normalizeSource(undefined, defaultSourceTemplate, presetIds, primaryPresetId, 0));
+		}
+		const processedSources: Record<string, ProcessedSourceInfo> = {};
+		const rawProcessed = raw.processedSources ?? {};
+		const fallbackSourceId = sources[0]!.id;
+		for (const [key, entry] of Object.entries(rawProcessed)) {
+			const info = entry as ProcessedSourceInfo;
+			processedSources[key] = {
+				...info,
+				sourceId: info?.sourceId ?? fallbackSourceId,
+			};
+		}
+		const openAIKeys: Record<string, string> = {};
+		for (const preset of presets) {
+			if (preset.openAI.apiKey) {
+				openAIKeys[preset.id] = preset.openAI.apiKey;
+			}
+		}
+		return {
+			settings: {
+				sources,
+				llmPresets: presets,
+				processedSources,
+			},
+			openAIKeys,
+		};
+	}
+
+	private migrateLegacySettings(raw: any): { settings: Ink2MDSettings; openAIKeys: Record<string, string> } {
+		const presetId = this.generateId('preset');
+		const sourceId = this.generateId('source');
+		const openAIKeys: Record<string, string> = {};
+		const legacyProvider = raw?.llmProvider ?? 'openai';
+		const legacyGenerationMode = raw?.llmGenerationMode ?? 'batch';
+		const defaultPresetTemplate = DEFAULT_SETTINGS.llmPresets[0]!;
+		const defaultSourceTemplate = DEFAULT_SETTINGS.sources[0]!;
+		const legacyPrompt = raw?.openAI?.promptTemplate ?? defaultPresetTemplate.openAI.promptTemplate;
+		const legacyLocalPrompt = raw?.local?.promptTemplate ?? defaultPresetTemplate.local.promptTemplate;
+		const preset: LLMPreset = {
+			id: presetId,
+			label: 'Default preset',
+			provider: legacyProvider,
+			generationMode: legacyGenerationMode,
+			llmMaxWidth: raw?.llmMaxWidth ?? defaultPresetTemplate.llmMaxWidth,
+			openAI: {
+				...defaultPresetTemplate.openAI,
+				...(raw?.openAI ?? {}),
+				promptTemplate: legacyPrompt,
+			},
+			local: {
+				...defaultPresetTemplate.local,
+				...(raw?.local ?? {}),
+				promptTemplate: legacyLocalPrompt,
+			},
+		};
+		if (preset.openAI.apiKey) {
+			openAIKeys[preset.id] = preset.openAI.apiKey;
+		}
+		const source: SourceConfig = {
+			...defaultSourceTemplate,
+			id: sourceId,
+			label: 'Default source',
+			directories: Array.isArray(raw?.inputDirectories) ? raw.inputDirectories : [],
+			recursive: true,
+			includeImages: raw?.includeImages ?? true,
+			includePdfs: raw?.includePdfs ?? true,
+			includeSupernote: raw?.includeSupernote ?? true,
+			attachmentMaxWidth: raw?.attachmentMaxWidth ?? raw?.maxImageWidth ?? defaultSourceTemplate.attachmentMaxWidth,
+			pdfDpi: raw?.pdfDpi ?? defaultSourceTemplate.pdfDpi,
+			replaceExisting: raw?.replaceExisting ?? defaultSourceTemplate.replaceExisting,
+			outputFolder: raw?.outputFolder ?? defaultSourceTemplate.outputFolder,
+			openGeneratedNotes: raw?.openGeneratedNotes ?? defaultSourceTemplate.openGeneratedNotes,
+			openInNewLeaf: true,
+			llmPresetId: presetId,
+			type: 'filesystem',
+		};
+		const processedSources: Record<string, ProcessedSourceInfo> = {};
+		const rawProcessed = raw?.processedSources ?? {};
+		for (const [key, entry] of Object.entries(rawProcessed)) {
+			const info = entry as ProcessedSourceInfo;
+			processedSources[key] = {
+				...info,
+				sourceId,
+			};
+		}
+		return {
+			settings: {
+				sources: [source],
+				llmPresets: [preset],
+				processedSources,
+			},
+			openAIKeys,
+		};
+	}
+
+	private normalizePreset(
+		preset: Partial<LLMPreset> | undefined,
+		fallback: LLMPreset,
+		index: number,
+	): LLMPreset {
+		const base = preset ?? {};
+		const id = base.id && base.id.trim().length ? base.id : this.generateId('preset');
+		return {
+			id,
+			label: base.label?.trim() || `Preset ${index + 1}`,
+			provider: base.provider ?? fallback.provider,
+			generationMode: base.generationMode ?? fallback.generationMode,
+			llmMaxWidth: base.llmMaxWidth ?? fallback.llmMaxWidth,
+			openAI: {
+				...fallback.openAI,
+				...(base.openAI ?? {}),
+			},
+			local: {
+				...fallback.local,
+				...(base.local ?? {}),
+			},
+		};
+	}
+
+	private normalizeSource(
+		source: Partial<SourceConfig> | undefined,
+		fallback: SourceConfig,
+		presetIds: Set<string>,
+		defaultPresetId: string,
+		index: number,
+	): SourceConfig {
+		const base = source ?? {};
+		const id = base.id && base.id.trim().length ? base.id : this.generateId('source');
+		const directories = Array.isArray(base.directories) ? base.directories.filter((dir) => typeof dir === 'string' && dir.trim().length > 0) : [];
+		const requestedPreset = base.llmPresetId && presetIds.has(base.llmPresetId) ? base.llmPresetId : defaultPresetId;
+		return {
+			...fallback,
+			...base,
+			id,
+			label: base.label?.trim() || `Source ${index + 1}`,
+			type: base.type ?? fallback.type ?? 'filesystem',
+			directories,
+			recursive: base.recursive ?? fallback.recursive,
+			includeImages: base.includeImages ?? fallback.includeImages,
+			includePdfs: base.includePdfs ?? fallback.includePdfs,
+			includeSupernote: base.includeSupernote ?? fallback.includeSupernote,
+			attachmentMaxWidth: base.attachmentMaxWidth ?? fallback.attachmentMaxWidth,
+			pdfDpi: base.pdfDpi ?? fallback.pdfDpi,
+			replaceExisting: base.replaceExisting ?? fallback.replaceExisting,
+			outputFolder: base.outputFolder ?? fallback.outputFolder,
+			openGeneratedNotes: base.openGeneratedNotes ?? fallback.openGeneratedNotes,
+			openInNewLeaf: base.openInNewLeaf ?? fallback.openInNewLeaf,
+			llmPresetId: requestedPreset,
+		};
+	}
+
+	private initializeOpenAISecrets(initialKeys: Record<string, string>) {
+		this.openAISecrets = {};
+		const storage = this.getSecretStorage();
+		if (storage) {
+			for (const preset of this.settings.llmPresets) {
+				const initial = initialKeys[preset.id];
+				if (initial) {
+					try {
+						storage.setSecret(this.buildSecretId(preset.id), initial);
+					} catch (error) {
+						console.error('[ink2md] Unable to migrate OpenAI API key into secret storage.', error);
+					}
+				}
+				const resolved = this.readOpenAISecretFromStore(preset.id);
+				this.openAISecrets[preset.id] = resolved;
+				preset.openAI.apiKey = '';
+			}
+		} else {
+			for (const preset of this.settings.llmPresets) {
+				const initial = initialKeys[preset.id] ?? '';
+				this.openAISecrets[preset.id] = initial;
+				preset.openAI.apiKey = initial;
+			}
 		}
 	}
 
-  async saveSettings() {
-		if (this.supportsSecretStorage()) {
-			this.settings.openAI.apiKey = '';
-		} else {
-			this.settings.openAI.apiKey = this.openAISecret ?? '';
-		}
-    await this.saveData(this.settings);
-  }
+	private generateId(prefix: string): string {
+		return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+	}
 }
 
 function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {

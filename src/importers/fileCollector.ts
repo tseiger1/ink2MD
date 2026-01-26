@@ -2,9 +2,14 @@ import { promises as fs } from 'fs';
 import type { Dirent } from 'fs';
 import path from 'path';
 
-export async function collectFilesRecursive(rootDir: string, extensions: string[]): Promise<string[]> {
+export async function collectFilesRecursive(
+	rootDir: string,
+	extensions: string[],
+	options?: { recursive?: boolean },
+): Promise<string[]> {
   const matches: string[] = [];
   const normalizedExt = new Set(extensions.map((ext) => ext.toLowerCase()));
+  const recursive = options?.recursive !== false;
 
   async function walk(currentPath: string) {
     let entries: Dirent[] = [];
@@ -18,7 +23,9 @@ export async function collectFilesRecursive(rootDir: string, extensions: string[
     for (const entry of entries) {
       const fullPath = path.join(currentPath, entry.name);
       if (entry.isDirectory()) {
-        await walk(fullPath);
+        if (recursive) {
+          await walk(fullPath);
+        }
         continue;
       }
       const ext = path.extname(entry.name).toLowerCase();

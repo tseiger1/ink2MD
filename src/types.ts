@@ -1,25 +1,28 @@
 export type InputFormat = 'image' | 'pdf' | 'supernote';
 
+export type SourceType = 'filesystem';
+
 export interface NoteSource {
-  id: string;
-  format: InputFormat;
-  filePath: string;
-  basename: string;
-  inputRoot: string;
-  relativeFolder: string;
+	id: string;
+	sourceId: string;
+	format: InputFormat;
+	filePath: string;
+	basename: string;
+	inputRoot: string;
+	relativeFolder: string;
 }
 
 export interface ConvertedPage {
-  pageNumber: number;
-  fileName: string;
-  width: number;
-  height: number;
-  data: Buffer;
+	pageNumber: number;
+	fileName: string;
+	width: number;
+	height: number;
+	data: Buffer;
 }
 
 export interface ConvertedNote {
-  source: NoteSource;
-  pages: ConvertedPage[];
+	source: NoteSource;
+	pages: ConvertedPage[];
 }
 
 export interface ImageEmbed {
@@ -28,53 +31,70 @@ export interface ImageEmbed {
 }
 
 export interface OpenAIProviderSettings {
-  apiKey: string;
-  model: string;
-  promptTemplate: string;
-  imageDetail: 'low' | 'high';
+	apiKey: string;
+	model: string;
+	promptTemplate: string;
+	imageDetail: 'low' | 'high';
 }
 
 export interface LocalProviderSettings {
-  endpoint: string;
-  apiKey: string;
-  model: string;
-  promptTemplate: string;
-  imageDetail: 'low' | 'high';
-}
-
-export interface ProcessedSourceInfo {
-  hash: string;
-  size: number;
-  mtimeMs: number;
-  processedAt: string;
-  outputFolder: string;
+	endpoint: string;
+	apiKey: string;
+	model: string;
+	promptTemplate: string;
+	imageDetail: 'low' | 'high';
 }
 
 export type LLMProvider = 'openai' | 'local';
 export type LLMGenerationMode = 'batch' | 'stream';
 
+export interface LLMPreset {
+	id: string;
+	label: string;
+	provider: LLMProvider;
+	generationMode: LLMGenerationMode;
+	llmMaxWidth: number;
+	openAI: OpenAIProviderSettings;
+	local: LocalProviderSettings;
+}
+
+export interface SourceConfig {
+	id: string;
+	label: string;
+	type: SourceType;
+	directories: string[];
+	recursive: boolean;
+	includeImages: boolean;
+	includePdfs: boolean;
+	includeSupernote: boolean;
+	attachmentMaxWidth: number;
+	pdfDpi: number;
+	replaceExisting: boolean;
+	outputFolder: string;
+	openGeneratedNotes: boolean;
+	openInNewLeaf: boolean;
+	llmPresetId: string | null;
+}
+
+export interface ProcessedSourceInfo {
+	hash: string;
+	size: number;
+	mtimeMs: number;
+	processedAt: string;
+	outputFolder: string;
+	sourceId: string;
+}
+
 export interface Ink2MDSettings {
-  inputDirectories: string[];
-  includeImages: boolean;
-  includePdfs: boolean;
-  includeSupernote: boolean;
-  attachmentMaxWidth: number;
-  llmMaxWidth: number;
-  pdfDpi: number;
-  replaceExisting: boolean;
-  outputFolder: string;
-  llmProvider: LLMProvider;
-  llmGenerationMode: LLMGenerationMode;
-  openGeneratedNotes: boolean;
-  openAI: OpenAIProviderSettings;
-  local: LocalProviderSettings;
-  processedSources: Record<string, ProcessedSourceInfo>;
+	sources: SourceConfig[];
+	llmPresets: LLMPreset[];
+	processedSources: Record<string, ProcessedSourceInfo>;
 }
 
 export interface MarkdownGenerationContext {
-  note: ConvertedNote;
-  llmMarkdown: string;
-  imageEmbeds: ImageEmbed[];
+	note: ConvertedNote;
+	llmMarkdown: string;
+	imageEmbeds: ImageEmbed[];
 }
 
 export type MarkdownStreamHandler = (chunk: string) => void | Promise<void>;
