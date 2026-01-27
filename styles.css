@@ -35,12 +35,10 @@
   margin-top: 0.5rem;
 }
 
-.ink2md-settings-section h3 {
-  margin-bottom: 0.5rem;
-}
 
-.ink2md-settings-section h4 {
-  margin: 1rem 0 0.5rem;
+.ink2md-section-title {
+  margin: 0;
+  font-size: 1.1rem;
   font-weight: 600;
 }
 
@@ -103,15 +101,20 @@
   flex: 1;
 }
 
-.ink2md-section-info h3 {
-  margin: 0;
-  padding-left: 0;
-}
-
 .ink2md-section-info p {
   margin: 0.25rem 0 0;
   color: var(--text-muted);
   padding-left: 0;
+}
+
+.ink2md-hidden-input {
+  display: none;
+}
+
+.ink2md-modal-heading {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
 }
 
 .ink2md-header-actions {

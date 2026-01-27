@@ -1,5 +1,9 @@
+import { Buffer } from 'buffer';
+import { describe, expect, it, jest } from '@jest/globals';
 import { buildFrontMatter, buildMarkdown, buildPagesSection } from 'src/markdown/generator';
 import { ConvertedNote, ImageEmbed, MarkdownGenerationContext } from 'src/types';
+
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
 
 const baseNote: ConvertedNote = {
   source: {

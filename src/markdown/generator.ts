@@ -28,8 +28,8 @@ export function buildPagesSection(imageEmbeds: ImageEmbed[]): string {
 function buildImageGallery(imageEmbeds: ImageEmbed[]): string {
 	return imageEmbeds
 		.map(({ path, width }, index) => {
-			const widthAttr = width ? ` width=\"${Math.round(width)}\"` : '';
-			return `<img src=\"${path}\" alt=\"Page ${index + 1}\"${widthAttr} />`;
+			const widthAttr = width ? ` width="${Math.round(width)}"` : '';
+			return `<img src="${path}" alt="Page ${index + 1}"${widthAttr} />`;
 		})
 		.join('\n\n');
 }

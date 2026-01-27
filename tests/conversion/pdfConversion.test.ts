@@ -1,4 +1,6 @@
+import { Buffer } from 'buffer';
 import { promises as fs } from 'fs';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { NoteSource } from 'src/types';
 
 jest.mock('fs', () => ({
@@ -15,15 +17,36 @@ jest.mock('pdfjs-dist/legacy/build/pdf.mjs', () => {
   };
 });
 
-let convertPdfSource: typeof import('src/conversion/pdfConversion')['convertPdfSource'];
-let pdfjsLib: typeof import('pdfjs-dist/legacy/build/pdf.mjs');
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
 
 type MockCanvas = {
-  width: number;
-  height: number;
-  getContext: jest.Mock;
-  toDataURL: jest.Mock;
+	width: number;
+	height: number;
+	getContext: jest.Mock;
+	toDataURL: jest.Mock;
 };
+
+type MockPdfPage = {
+	pageNumber: number;
+	render: jest.Mock<{ promise: Promise<void> }>;
+	getViewport: jest.Mock<{ width: number; height: number }, [{ scale: number }]>;
+	cleanup: jest.Mock;
+};
+
+type MockPdfDocument = {
+	numPages: number;
+	getPage: jest.Mock<Promise<MockPdfPage>, [number]>;
+	destroy: jest.Mock<Promise<void>>;
+};
+
+type PdfLoadingTask = ReturnType<typeof import('pdfjs-dist/legacy/build/pdf.mjs')['getDocument']>;
+
+type MockPdfLoadingTask = {
+	promise: Promise<MockPdfDocument>;
+};
+
+let convertPdfSource: typeof import('src/conversion/pdfConversion')['convertPdfSource'];
+let pdfjsLib: typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 
 const source: NoteSource = {
   id: 'pdf-source',
@@ -35,35 +58,35 @@ const source: NoteSource = {
   relativeFolder: 'imports',
 };
 
-const originalDocument = global.document;
-const originalWindow = global.window;
-const originalBlob = (global as any).Blob;
-const originalURL = global.URL;
+const originalDocument = globalThis.document;
+const originalWindow = globalThis.window;
+const originalBlob = (globalThis as typeof globalThis & { Blob?: typeof Blob }).Blob;
+const originalURL = globalThis.URL;
 
 beforeAll(async () => {
-  (global as any).Blob = class {
-    constructor(_parts: unknown[], _options?: unknown) {}
-  };
-  global.URL = {
-    createObjectURL: jest.fn(() => 'blob:mock'),
-    revokeObjectURL: jest.fn(),
-  } as unknown as typeof URL;
-  global.window = {
-    addEventListener: jest.fn(),
-  } as unknown as Window & typeof globalThis;
+	(globalThis as typeof globalThis & { Blob?: typeof Blob }).Blob = class {
+		constructor(_parts: unknown[], _options?: unknown) {}
+	};
+	globalThis.URL = {
+		createObjectURL: jest.fn(() => 'blob:mock'),
+		revokeObjectURL: jest.fn(),
+	} as unknown as typeof URL;
+	globalThis.window = {
+		addEventListener: jest.fn(),
+	} as unknown as Window & typeof globalThis;
 
   ({ convertPdfSource } = await import('src/conversion/pdfConversion'));
   pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
 });
 
-const createPage = (pageNumber: number) => {
-  const render = jest.fn(() => ({ promise: Promise.resolve() }));
-  const getViewport = jest.fn(({ scale }: { scale: number }) => ({
-    width: 1200 * scale,
-    height: 800 * scale,
-  }));
-  const cleanup = jest.fn();
-  return { pageNumber, render, getViewport, cleanup };
+const createPage = (pageNumber: number): MockPdfPage => {
+	const render = jest.fn(() => ({ promise: Promise.resolve() }));
+	const getViewport = jest.fn(({ scale }: { scale: number }) => ({
+		width: 1200 * scale,
+		height: 800 * scale,
+	}));
+	const cleanup = jest.fn();
+	return { pageNumber, render, getViewport, cleanup };
 };
 
 describe('convertPdfSource', () => {
@@ -75,37 +98,38 @@ describe('convertPdfSource', () => {
     getDocumentMock = pdfjsLib.getDocument as jest.MockedFunction<typeof pdfjsLib.getDocument>;
     const page1 = createPage(1);
     const page2 = createPage(2);
-    const pdf = {
+    const pdf: MockPdfDocument = {
       numPages: 2,
       getPage: jest.fn(async (index: number) => (index === 1 ? page1 : page2)),
       destroy: jest.fn(async () => {}),
     };
-    getDocumentMock.mockReturnValue({ promise: Promise.resolve(pdf) } as any);
+    const loadingTask: MockPdfLoadingTask = { promise: Promise.resolve(pdf) };
+    getDocumentMock.mockReturnValue(loadingTask as unknown as PdfLoadingTask);
     readFileMock.mockResolvedValue(Buffer.from('pdf-bytes'));
 
     const canvases: MockCanvas[] = [
       createCanvas('page-1'),
       createCanvas('page-2'),
     ];
-    global.document = {
+    globalThis.document = {
       createElement: jest.fn(() => canvases.shift()!),
     } as unknown as Document;
     consoleErrorSpy.mockClear();
   });
 
-  afterEach(() => {
-    readFileMock.mockReset();
-    getDocumentMock.mockReset();
-    global.document = originalDocument;
-  });
+afterEach(() => {
+	readFileMock.mockReset();
+	getDocumentMock.mockReset();
+	globalThis.document = originalDocument;
+});
 
-  afterAll(() => {
-    global.document = originalDocument;
-    global.window = originalWindow;
-    (global as any).Blob = originalBlob;
-    global.URL = originalURL;
-    consoleErrorSpy.mockRestore();
-  });
+afterAll(() => {
+	globalThis.document = originalDocument;
+	globalThis.window = originalWindow;
+	(globalThis as typeof globalThis & { Blob?: typeof Blob }).Blob = originalBlob;
+	globalThis.URL = originalURL;
+	consoleErrorSpy.mockRestore();
+});
 
   it('converts each PDF page into a PNG buffer respecting max width and dpi', async () => {
     const result = await convertPdfSource(source, 600, 144);
@@ -128,7 +152,7 @@ describe('convertPdfSource', () => {
   });
 
   it('returns null and logs when the canvas context is unavailable', async () => {
-    global.document = {
+    globalThis.document = {
       createElement: jest.fn(() => ({
         width: 0,
         height: 0,
@@ -142,7 +166,10 @@ describe('convertPdfSource', () => {
   });
 
   it('returns null when pdf.js fails to load the document', async () => {
-    getDocumentMock.mockReturnValueOnce({ promise: Promise.reject(new Error('load error')) } as any);
+    const failingTask: MockPdfLoadingTask = {
+      promise: Promise.reject(new Error('load error')),
+    };
+    getDocumentMock.mockReturnValueOnce(failingTask as unknown as PdfLoadingTask);
 
     const result = await convertPdfSource(source, 600, 144);
     expect(result).toBeNull();

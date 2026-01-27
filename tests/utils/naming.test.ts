@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
+import { describe, expect, it } from '@jest/globals';
 import { createStableId, slugifyFilePath } from 'src/utils/naming';
+
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
 
 describe('slugifyFilePath', () => {
   it('converts mixed characters into a lowercase slug', () => {

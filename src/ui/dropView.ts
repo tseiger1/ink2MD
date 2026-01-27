@@ -19,9 +19,9 @@ export class Ink2MDDropView extends ItemView {
     return VIEW_TYPE_INK2MD_DROP;
   }
 
-  getDisplayText(): string {
-    return 'Ink2MD dropzone';
-  }
+	getDisplayText(): string {
+		return `${this.plugin.getPluginName()} dropzone`;
+	}
 
   getIcon(): string {
     return 'pen-tool';
@@ -45,14 +45,14 @@ export class Ink2MDDropView extends ItemView {
     container.addClass('ink2md-drop-view-container');
 
     const sources = this.plugin.getDropzoneSources();
-    if (!sources.length) {
-      const emptyState = container.createDiv({ cls: 'ink2md-drop-empty' });
-      emptyState.createEl('h3', { text: 'Set up manual imports' });
-      emptyState.createEl('p', {
-        text: 'Create a dropzone source in Ink2MD settings to start dragging files here.',
-      });
-      return;
-    }
+		if (!sources.length) {
+			const emptyState = container.createDiv({ cls: 'ink2md-drop-empty' });
+			emptyState.createEl('h3', { text: 'Set up manual imports' });
+			emptyState.createEl('p', {
+				text: 'Create a dropzone source in the plugin settings to start dragging files here.',
+			});
+			return;
+		}
 
     if (!this.selectedSourceId || !sources.find((source) => source.id === this.selectedSourceId)) {
       this.selectedSourceId = sources[0]!.id;
@@ -110,8 +110,8 @@ export class Ink2MDDropView extends ItemView {
       text: 'or click to browse for files',
     });
 
-    this.fileInput = wrapper.createEl('input', { type: 'file' });
-    this.fileInput.style.display = 'none';
+	this.fileInput = wrapper.createEl('input', { type: 'file' });
+	this.fileInput.addClass('ink2md-hidden-input');
     this.fileInput.multiple = true;
     this.fileInput.accept = this.getAcceptForSource();
     this.fileInput.addEventListener('change', () => {
@@ -150,15 +150,15 @@ export class Ink2MDDropView extends ItemView {
       return;
     }
     const source = this.getSelectedSource();
-    if (!source) {
-      new Notice('Ink2MD: configure a dropzone source first.');
-      return;
-    }
+		if (!source) {
+			new Notice('Configure a dropzone source first.');
+			return;
+		}
     const { paths, staged } = await this.resolveFilePaths(files);
-    if (!paths.length) {
-      new Notice('Ink2MD: unable to read file paths from the dropped files.');
-      return;
-    }
+		if (!paths.length) {
+			new Notice('Unable to read file paths from the dropped files.');
+			return;
+		}
     this.setStatus(`Importing ${paths.length} file${paths.length === 1 ? '' : 's'}...`);
     try {
       await this.plugin.importDroppedFiles(source.id, paths);

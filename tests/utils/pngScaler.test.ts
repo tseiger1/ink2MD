@@ -1,7 +1,11 @@
+import { Buffer } from 'buffer';
+import { afterAll, afterEach, describe, expect, it, jest } from '@jest/globals';
 import { scalePngBufferToDataUrl } from 'src/utils/pngScaler';
 
-const ORIGINAL_DOCUMENT = global.document;
-const OriginalImage = global.Image;
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/unbound-method */
+
+const ORIGINAL_DOCUMENT = globalThis.document;
+const OriginalImage = (globalThis as typeof globalThis & { Image?: typeof Image }).Image;
 
 const imageDimensions = { width: 0, height: 0 };
 
@@ -11,22 +15,22 @@ class MockImage {
   onload: (() => void) | null = null;
   onerror: ((err: unknown) => void) | null = null;
 
-  set src(_value: string) {
-    setImmediate(() => {
-      if (MockImage.shouldError) {
-        this.onerror?.(new Error('load error'));
-        return;
-      }
-      this.width = imageDimensions.width;
-      this.height = imageDimensions.height;
-      this.onload?.();
-    });
-  }
+	set src(_value: string) {
+		setTimeout(() => {
+			if (MockImage.shouldError) {
+				this.onerror?.(new Error('load error'));
+				return;
+			}
+			this.width = imageDimensions.width;
+			this.height = imageDimensions.height;
+			this.onload?.();
+		}, 0);
+	}
 
   static shouldError = false;
 }
 
-global.Image = MockImage as unknown as typeof Image;
+globalThis.Image = MockImage as unknown as typeof Image;
 
 const withCanvas = ({
   toDataUrlValue = 'data:image/png;base64,canvas',
@@ -42,7 +46,7 @@ const withCanvas = ({
     toDataURL: jest.fn(() => toDataUrlValue),
   } as unknown as HTMLCanvasElement;
 
-  global.document = {
+	globalThis.document = {
     createElement: jest.fn(() => canvas),
   } as unknown as Document;
 
@@ -59,12 +63,14 @@ describe('scalePngBufferToDataUrl', () => {
   const pngBuffer = Buffer.from('image-bytes');
 
   afterEach(() => {
-    global.document = ORIGINAL_DOCUMENT;
+    globalThis.document = ORIGINAL_DOCUMENT;
     MockImage.shouldError = false;
   });
 
   afterAll(() => {
-    global.Image = OriginalImage;
+    if (OriginalImage) {
+      globalThis.Image = OriginalImage;
+    }
   });
 
   it('scales the image down to the provided max width', async () => {
@@ -96,7 +102,7 @@ describe('scalePngBufferToDataUrl', () => {
     imageDimensions.width = 640;
     imageDimensions.height = 360;
 
-    global.document = {
+    globalThis.document = {
       createElement: jest.fn(() => ({
         getContext: () => null,
         width: 0,
@@ -108,7 +114,7 @@ describe('scalePngBufferToDataUrl', () => {
   });
 
   it('short-circuits to the buffer data URL when maxWidth is missing or invalid', async () => {
-    global.document = {
+    globalThis.document = {
       createElement: jest.fn(() => {
         throw new Error('should not be called');
       }),

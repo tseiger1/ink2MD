@@ -29,6 +29,21 @@ const DEFAULT_SOURCE_LABEL = 'Source';
 const DEFAULT_DROPZONE_ID = 'source-dropzone';
 const DEFAULT_DROPZONE_LABEL = 'Dropzone Target';
 
+const PROVIDER_LABELS: Record<LLMProvider, string> = {
+	openai: 'OpenAI',
+	'azure-openai': 'Azure OpenAI',
+	gemini: 'Google Gemini',
+	local: 'Local',
+};
+
+const OPENAI_KEY_PLACEHOLDER = 'sk-...';
+const AZURE_KEY_PLACEHOLDER = 'az-...';
+const GEMINI_KEY_PLACEHOLDER = 'AIza...';
+const LOCAL_ENDPOINT_PLACEHOLDER = 'http://localhost:11434/v1/chat/completions';
+const AZURE_ENDPOINT_PLACEHOLDER = 'https://example-resource.openai.azure.com/';
+const AZURE_MODEL_PLACEHOLDER = 'gpt-5-mini';
+const AZURE_VERSION_PLACEHOLDER = '2024-02-15-preview';
+
 const DEFAULT_LLM_PRESET: LLMPreset = {
   id: DEFAULT_PRESET_ID,
   label: 'Default preset',
@@ -123,24 +138,24 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    const hero = containerEl.createDiv({ cls: 'ink2md-hero' });
-    const icon = hero.createSpan({ cls: 'ink2md-hero-icon' });
-    setIcon(icon, 'pen-tool' as any);
-    const heroText = hero.createDiv({ cls: 'ink2md-hero-text' });
-    heroText.createEl('h2', { text: 'Ink2MD' });
-    heroText.createEl('p', {
-      text: 'Import handwritten notes, convert them to markdown, and summarize them with a vision LLM.',
-    });
+	const hero = containerEl.createDiv({ cls: 'ink2md-hero' });
+	const icon = hero.createSpan({ cls: 'ink2md-hero-icon' });
+	setIcon(icon, 'pen-tool');
+	const heroText = hero.createDiv({ cls: 'ink2md-hero-text' });
+	new Setting(heroText).setName(this.plugin.getPluginName()).setHeading();
+	heroText.createEl('p', {
+		text: 'Import handwritten notes, convert them to Markdown, and summarize them with a vision model.',
+	});
     this.renderSourcesSection(containerEl);
     this.renderPresetsSection(containerEl);
   }
 
   private renderSourcesSection(containerEl: HTMLElement) {
-    const { sectionEl, actions } = this.createSection(
-      containerEl,
-      'Sources & Targets',
-      'Define folder sources or dropzone targets for manual imports.',
-    );
+	const { sectionEl, actions } = this.createSection(
+		containerEl,
+		'Sources & targets',
+		'Define folder sources or dropzone targets for manual imports.',
+	);
 
     this.createTextButton(actions, 'Clear all caches', async () => {
       if (!(await this.confirmReset())) {
@@ -148,10 +163,10 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       }
       this.plugin.settings.processedSources = {};
       await this.plugin.saveSettings();
-      new Notice('Ink2MD: cleared cache for every source.');
+		new Notice('Cleared cache for every source.');
       this.display();
     }, !this.hasAnyCache());
-    this.createTextButton(actions, '+ Add source', () => {
+	this.createTextButton(actions, 'Add source', () => {
       const preset = this.plugin.settings.llmPresets[0];
       if (!preset) {
         new Notice('Create a preset before adding sources.');
@@ -215,7 +230,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       'Presets hold LLM settings and prompts.',
     );
 
-    actions.createEl('button', { text: '+ Add preset', cls: 'ink2md-text-button' }).addEventListener('click', () => {
+	actions.createEl('button', { text: 'Add preset', cls: 'ink2md-text-button' }).addEventListener('click', () => {
       const newPreset: LLMPreset = {
         ...this.clonePreset(DEFAULT_LLM_PRESET),
         id: this.createId('preset'),
@@ -348,9 +363,9 @@ export class Ink2MDSettingTab extends PluginSettingTab {
             }),
         );
     } else {
-      new Setting(container)
-        .setName('Dropzone input')
-        .setDesc('Drag files into the Ink2MD right sidebar view or use its browse button.');
+		new Setting(container)
+			.setName('Dropzone input')
+			.setDesc('Drag files into the dropzone view or use its browse button.');
     }
 
     new Setting(container)
@@ -462,9 +477,9 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
     this.addSettingsDivider(container);
 
-    new Setting(container)
-      .setName('LLM preset')
-      .setDesc('Pick which preset powers this source.')
+	new Setting(container)
+		.setName('Language model preset')
+		.setDesc('Pick which preset powers this source.')
       .addDropdown((dropdown) => {
         dropdown
           .addOptions(Object.fromEntries(this.plugin.settings.llmPresets.map((preset) => [preset.id, preset.label])))
@@ -489,26 +504,25 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(container)
-      .setName('Provider')
-      .setDesc('Choose between OpenAI, Azure OpenAI, Google Gemini, or a local OpenAI-compatible endpoint.')
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption('openai', 'OpenAI')
-          .addOption('azure-openai', 'Azure OpenAI')
-          .addOption('gemini', 'Google Gemini')
-          .addOption('local', 'Local')
-          .setValue(draft.provider)
-          .onChange((value) => {
-            draft.provider = value as LLMProvider;
-            summaryEl.setText(this.describePreset(draft));
-            this.display();
-          }),
-      );
+	new Setting(container)
+		.setName('Provider')
+		.setDesc('Choose which provider powers this preset.')
+		.addDropdown((dropdown) => {
+			Object.entries(PROVIDER_LABELS).forEach(([provider, label]) => {
+				dropdown.addOption(provider, label);
+			});
+			dropdown
+				.setValue(draft.provider)
+				.onChange((value) => {
+					draft.provider = value as LLMProvider;
+					summaryEl.setText(this.describePreset(draft));
+					this.display();
+				});
+		});
 
-    new Setting(container)
-      .setName('Streaming')
-      .setDesc('Enable to write LLM tokens to disk as they arrive; disable to wait for the full response before writing.')
+	new Setting(container)
+		.setName('Streaming')
+		.setDesc('Enable to write language model tokens to disk as they arrive; disable to wait for the full response before writing.')
       .addToggle((toggle) =>
         toggle
           .setValue(draft.generationMode === 'stream')
@@ -558,7 +572,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
         const placeholder = '••••••••';
         const canShowPlaceholder = secretState.hasSecret && !secretState.cleared && !secretState.dirty && !draft.openAI.apiKey;
         let showingPlaceholder = false;
-        text.setPlaceholder('sk-...');
+		text.setPlaceholder(OPENAI_KEY_PLACEHOLDER);
         if (canShowPlaceholder) {
           text.setValue(placeholder);
           showingPlaceholder = true;
@@ -631,7 +645,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
         const placeholder = '••••••••';
         const canShowPlaceholder = secretState.hasSecret && !secretState.cleared && !secretState.dirty && !draft.azureOpenAI.apiKey;
         let showingPlaceholder = false;
-        text.setPlaceholder('az-...');
+		text.setPlaceholder(AZURE_KEY_PLACEHOLDER);
         if (canShowPlaceholder) {
           text.setValue(placeholder);
           showingPlaceholder = true;
@@ -667,8 +681,8 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       .setName('Endpoint')
       .setDesc('Azure resource endpoint, e.g. https://example-resource.openai.azure.com/.')
       .addText((text) =>
-        text
-          .setPlaceholder('https://example-resource.openai.azure.com/')
+		text
+			.setPlaceholder(AZURE_ENDPOINT_PLACEHOLDER)
           .setValue(draft.azureOpenAI.endpoint)
           .onChange((value) => {
             draft.azureOpenAI.endpoint = value.trim();
@@ -679,8 +693,8 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       .setName('Model')
       .setDesc('Azure OpenAI deployment/model name, e.g. gpt-5-mini.')
       .addText((text) =>
-        text
-          .setPlaceholder('gpt-5-mini')
+		text
+			.setPlaceholder(AZURE_MODEL_PLACEHOLDER)
           .setValue(draft.azureOpenAI.deployment)
           .onChange((value) => {
             draft.azureOpenAI.deployment = value.trim();
@@ -691,8 +705,8 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       .setName('API version')
       .setDesc('Defaults to the SDK version recommended for your deployment.')
       .addText((text) =>
-        text
-          .setPlaceholder('2024-02-15-preview')
+		text
+			.setPlaceholder(AZURE_VERSION_PLACEHOLDER)
           .setValue(draft.azureOpenAI.apiVersion)
           .onChange((value) => {
             draft.azureOpenAI.apiVersion = value.trim();
@@ -730,7 +744,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
         const placeholder = '••••••••';
         const canShowPlaceholder = secretState.hasSecret && !secretState.cleared && !secretState.dirty && !draft.gemini.apiKey;
         let showingPlaceholder = false;
-        text.setPlaceholder('AIza...');
+		text.setPlaceholder(GEMINI_KEY_PLACEHOLDER);
         if (canShowPlaceholder) {
           text.setValue(placeholder);
           showingPlaceholder = true;
@@ -778,12 +792,12 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   }
 
   private renderLocalFields(container: HTMLElement, draft: LLMPreset) {
-    new Setting(container)
-      .setName('Endpoint URL')
-      .setDesc('HTTP endpoint that accepts OpenAI-compatible chat completions requests.')
+	new Setting(container)
+		.setName('Endpoint URL')
+		.setDesc(`HTTP endpoint that accepts ${PROVIDER_LABELS.openai}-compatible chat completions requests.`)
       .addText((text) =>
-        text
-          .setPlaceholder('http://localhost:11434/v1/chat/completions')
+		text
+			.setPlaceholder(LOCAL_ENDPOINT_PLACEHOLDER)
           .setValue(draft.local.endpoint)
           .onChange((value) => {
             draft.local.endpoint = value.trim();
@@ -830,9 +844,9 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   private createSection(containerEl: HTMLElement, title: string, description: string) {
     const sectionEl = containerEl.createDiv({ cls: 'ink2md-settings-section' });
     const header = sectionEl.createDiv({ cls: 'ink2md-section-header' });
-    const info = header.createDiv({ cls: 'ink2md-section-info' });
-    info.createEl('h3', { text: title });
-    info.createEl('p', { text: description });
+	const info = header.createDiv({ cls: 'ink2md-section-info' });
+	info.createDiv({ cls: 'ink2md-section-title', text: title });
+	info.createEl('p', { text: description });
     const actions = header.createDiv({ cls: 'ink2md-header-actions' });
     return { sectionEl, actions };
   }
@@ -1016,8 +1030,8 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       }
     }
     await this.plugin.saveSettings();
-    if (removed > 0) {
-      new Notice(`Ink2MD: cleared ${removed} cached entries.`);
+	if (removed > 0) {
+		new Notice(`Cleared ${removed} cached entries.`);
     }
   }
 
@@ -1043,15 +1057,15 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   }
 
   private async deleteSource(sourceId: string) {
-    if (this.plugin.settings.sources.length === 1) {
-      new Notice('Ink2MD: at least one source is required.');
+	if (this.plugin.settings.sources.length === 1) {
+		new Notice('At least one source is required.');
       return;
     }
     this.plugin.settings.sources = this.plugin.settings.sources.filter((source) => source.id !== sourceId);
     this.sourceDrafts.delete(sourceId);
     await this.clearSourceCache(sourceId);
     await this.plugin.saveSettings();
-    new Notice('Ink2MD: source deleted.');
+	new Notice('Source deleted.');
     this.display();
   }
 
@@ -1070,12 +1084,12 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
   private async deletePreset(presetId: string) {
     const inUse = this.plugin.settings.sources.some((source) => source.llmPresetId === presetId);
-    if (inUse) {
-      new Notice('Ink2MD: this preset is still referenced by at least one source.');
+	if (inUse) {
+		new Notice('This preset is still referenced by at least one source.');
       return;
     }
-    if (this.plugin.settings.llmPresets.length === 1) {
-      new Notice('Ink2MD: at least one preset is required.');
+	if (this.plugin.settings.llmPresets.length === 1) {
+		new Notice('At least one preset is required.');
       return;
     }
     this.plugin.settings.llmPresets = this.plugin.settings.llmPresets.filter((preset) => preset.id !== presetId);
@@ -1234,8 +1248,8 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     if (isDanger) {
       button.addClass('mod-warning');
     }
-    const iconSpan = button.createSpan();
-    setIcon(iconSpan, icon as any);
+	const iconSpan = button.createSpan();
+	setIcon(iconSpan, icon);
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1331,10 +1345,10 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           super(app);
         }
 
-        onOpen() {
-          const { contentEl } = this;
-          contentEl.createEl('h3', { text: options.title });
-          contentEl.createEl('p', { text: options.message });
+				onOpen() {
+					const { contentEl } = this;
+					contentEl.createDiv({ cls: 'ink2md-modal-heading', text: options.title });
+					contentEl.createEl('p', { text: options.message });
           const buttonBar = contentEl.createDiv({ cls: 'ink2md-modal-buttons' });
           buttonBar.createEl('button', { text: 'Cancel' }).addEventListener('click', () => {
             this.close();
@@ -1387,13 +1401,13 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  private cloneSource(source: SourceConfig): SourceConfig {
-    return JSON.parse(JSON.stringify(source));
-  }
+	private cloneSource(source: SourceConfig): SourceConfig {
+		return structuredClone(source);
+	}
 
-  private clonePreset(preset: LLMPreset): LLMPreset {
-    return JSON.parse(JSON.stringify(preset));
-  }
+	private clonePreset(preset: LLMPreset): LLMPreset {
+		return structuredClone(preset);
+	}
 }
 
 class FolderSuggest extends AbstractInputSuggest<string> {

@@ -43,6 +43,58 @@ type SourceFingerprint = {
 	size: number;
 	mtimeMs: number;
 };
+
+type StoredSettingsSnapshot = Partial<
+	Omit<Ink2MDSettings, 'processedSources' | 'secretBindings'>
+> & {
+	processedSources?: Record<string, unknown>;
+	secretBindings?: Record<string, unknown>;
+	[key: string]: unknown;
+};
+
+type LegacySettingsSnapshot = StoredSettingsSnapshot & {
+	llmProvider?: LLMPreset['provider'];
+	llmGenerationMode?: LLMPreset['generationMode'];
+	llmMaxWidth?: number;
+	openAI?: Partial<LLMPreset['openAI']>;
+	azureOpenAI?: Partial<LLMPreset['azureOpenAI']>;
+	local?: Partial<LLMPreset['local']>;
+	gemini?: Partial<LLMPreset['gemini']>;
+	inputDirectories?: unknown;
+	includeImages?: boolean;
+	includePdfs?: boolean;
+	attachmentMaxWidth?: number;
+	maxImageWidth?: number;
+	pdfDpi?: number;
+	replaceExisting?: boolean;
+	outputFolder?: string;
+	openGeneratedNotes?: boolean;
+	processedSources?: Record<string, unknown>;
+	preImportScript?: string;
+};
+
+function isProcessedSourceInfo(value: unknown): value is ProcessedSourceInfo {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const candidate = value as Record<string, unknown>;
+	return (
+		typeof candidate.hash === 'string' &&
+		typeof candidate.size === 'number' &&
+		typeof candidate.mtimeMs === 'number' &&
+		typeof candidate.processedAt === 'string' &&
+		typeof candidate.outputFolder === 'string' &&
+		typeof candidate.sourceId === 'string'
+	);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
+}
+
+function isStoredSettingsSnapshot(value: unknown): value is StoredSettingsSnapshot {
+	return isRecord(value);
+}
 interface FreshnessResult {
 	shouldProcess: boolean;
 	fingerprint?: SourceFingerprint;
@@ -74,6 +126,10 @@ interface ImportRunOptions {
 	private notifiedMissingSecretStorage = false;
 	private stagedFiles = new Set<string>();
 	private dropzoneCacheDir: string | null = null;
+
+	getPluginName(): string {
+		return this.manifest?.name ?? 'Ink2MD';
+	}
 
   async onload() {
     await this.loadSettings();
@@ -134,7 +190,7 @@ interface ImportRunOptions {
 				this.setStatus('Script blocked import');
 				return 'Script blocked';
 			}
-				new Notice('No sources are ready to import. Configure at least one source with directories and an LLM preset.');
+					new Notice('No sources are ready to import. Configure at least one source with directories and a language model preset.');
 				this.setStatus('Configuration required');
 			return 'Configuration required';
 		}
@@ -1347,17 +1403,18 @@ interface ImportRunOptions {
 	}
 
 	async loadSettings() {
-		const stored = (await this.loadData()) as Partial<Ink2MDSettings> | null;
+		const storedData: unknown = await this.loadData();
+		const stored: StoredSettingsSnapshot | null = isStoredSettingsSnapshot(storedData) ? storedData : null;
 		let normalized: {
 			settings: Ink2MDSettings;
 			openAIKeys: Record<string, string>;
 			azureOpenAIKeys: Record<string, string>;
 			geminiKeys: Record<string, string>;
 		};
-		if (!stored || !Array.isArray((stored as Ink2MDSettings).sources) || !Array.isArray((stored as Ink2MDSettings).llmPresets)) {
-			normalized = this.migrateLegacySettings(stored ?? {});
+		if (!stored || !Array.isArray(stored.sources) || !Array.isArray(stored.llmPresets)) {
+			normalized = this.migrateLegacySettings(stored ?? undefined);
 		} else {
-			normalized = this.normalizeSettings(stored as Partial<Ink2MDSettings>);
+			normalized = this.normalizeSettings(stored);
 		}
 		this.settings = normalized.settings;
 		this.initializeOpenAISecrets(normalized.openAIKeys);
@@ -1386,7 +1443,7 @@ interface ImportRunOptions {
 	}
 
 	private normalizeSettings(
-		raw: Partial<Ink2MDSettings>,
+		raw: StoredSettingsSnapshot,
 	): {
 		settings: Ink2MDSettings;
 		openAIKeys: Record<string, string>;
@@ -1431,10 +1488,12 @@ interface ImportRunOptions {
 		const rawProcessed = raw.processedSources ?? {};
 		const fallbackSourceId = sources[0]!.id;
 		for (const [key, entry] of Object.entries(rawProcessed)) {
-			const info = entry as ProcessedSourceInfo;
+			if (!isProcessedSourceInfo(entry)) {
+				continue;
+			}
 			processedSources[key] = {
-				...info,
-				sourceId: info?.sourceId ?? fallbackSourceId,
+				...entry,
+				sourceId: entry.sourceId ?? fallbackSourceId,
 			};
 		}
 		const openAIKeys: Record<string, string> = {};
@@ -1451,7 +1510,7 @@ interface ImportRunOptions {
 				geminiKeys[preset.id] = preset.gemini.apiKey;
 			}
 		}
-		const rawBindings = ((raw as Ink2MDSettings)?.secretBindings ?? {}) as Record<string, unknown>;
+		const rawBindings = raw.secretBindings ?? {};
 		const secretBindings: Record<string, Partial<Record<SecretProvider, string>>> = {};
 		if (rawBindings && typeof rawBindings === 'object') {
 			for (const [presetId, binding] of Object.entries(rawBindings)) {
@@ -1464,10 +1523,9 @@ interface ImportRunOptions {
 					}
 					continue;
 				}
-				if (binding && typeof binding === 'object') {
-					const bindingEntries = binding as Record<string, unknown>;
+				if (isRecord(binding)) {
 					const entry: Partial<Record<SecretProvider, string>> = {};
-					for (const [providerKey, secretId] of Object.entries(bindingEntries)) {
+					for (const [providerKey, secretId] of Object.entries(binding)) {
 						if (providerKey === 'openai' || providerKey === 'azure-openai' || providerKey === 'gemini') {
 							if (typeof secretId !== 'string') {
 								continue;
@@ -1497,7 +1555,7 @@ interface ImportRunOptions {
 		};
 	}
 
-	private migrateLegacySettings(raw: any): {
+	private migrateLegacySettings(raw: LegacySettingsSnapshot | null | undefined): {
 		settings: Ink2MDSettings;
 		openAIKeys: Record<string, string>;
 		azureOpenAIKeys: Record<string, string>;
@@ -1544,11 +1602,14 @@ interface ImportRunOptions {
 		if (preset.azureOpenAI.apiKey) {
 			azureOpenAIKeys[preset.id] = preset.azureOpenAI.apiKey;
 		}
+		const legacyDirectories = Array.isArray(raw?.inputDirectories)
+			? raw.inputDirectories.filter((entry): entry is string => typeof entry === 'string')
+			: [];
 		const source: SourceConfig = {
-			...defaultSourceTemplate,
-			id: sourceId,
-			label: 'Default source',
-			directories: Array.isArray(raw?.inputDirectories) ? raw.inputDirectories : [],
+				...defaultSourceTemplate,
+				id: sourceId,
+				label: 'Default source',
+				directories: legacyDirectories,
 			recursive: true,
 			includeImages: raw?.includeImages ?? true,
 			includePdfs: raw?.includePdfs ?? true,
@@ -1565,9 +1626,11 @@ interface ImportRunOptions {
 		const processedSources: Record<string, ProcessedSourceInfo> = {};
 		const rawProcessed = raw?.processedSources ?? {};
 		for (const [key, entry] of Object.entries(rawProcessed)) {
-			const info = entry as ProcessedSourceInfo;
+			if (!isProcessedSourceInfo(entry)) {
+				continue;
+			}
 			processedSources[key] = {
-				...info,
+				...entry,
 				sourceId,
 			};
 		}
@@ -1657,7 +1720,7 @@ interface ImportRunOptions {
 		if (!storage) {
 			if (Object.keys(initialKeys).length) {
 				console.warn('[ink2md] Secret storage unavailable; unable to migrate stored OpenAI API keys.');
-				new Notice('Secure key storage is unavailable. Update Obsidian to keep your OpenAI API keys saved.');
+					new Notice('Secure key storage is unavailable. Update Obsidian to keep your API keys saved.');
 			}
 			this.settings.secretBindings = {};
 			for (const preset of this.settings.llmPresets) {

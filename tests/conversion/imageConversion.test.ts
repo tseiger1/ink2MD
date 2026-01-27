@@ -1,6 +1,10 @@
+import { Buffer } from 'buffer';
 import { promises as fs } from 'fs';
+import { afterAll, afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { convertImageSource } from 'src/conversion/imageConversion';
 import { NoteSource } from 'src/types';
+
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-deprecated */
 
 jest.mock('fs', () => ({
   promises: {
@@ -19,8 +23,8 @@ type MockContext = {
   drawImage: jest.Mock;
 };
 
-const originalDocument = global.document;
-const OriginalImage = global.Image;
+const originalDocument = globalThis.document;
+const OriginalImage = (globalThis as typeof globalThis & { Image?: typeof Image }).Image;
 
 const imageDimensions = { width: 0, height: 0 };
 
@@ -30,22 +34,22 @@ class MockImage {
   onload: (() => void) | null = null;
   onerror: ((err: unknown) => void) | null = null;
 
-  set src(_value: string) {
-    setImmediate(() => {
-      if (MockImage.shouldError) {
-        this.onerror?.(new Error('image error'));
-        return;
-      }
-      this.width = imageDimensions.width;
-      this.height = imageDimensions.height;
-      this.onload?.();
-    });
-  }
+	set src(_value: string) {
+		setTimeout(() => {
+			if (MockImage.shouldError) {
+				this.onerror?.(new Error('image error'));
+				return;
+			}
+			this.width = imageDimensions.width;
+			this.height = imageDimensions.height;
+			this.onload?.();
+		}, 0);
+	}
 
   static shouldError = false;
 }
 
-global.Image = MockImage as unknown as typeof Image;
+globalThis.Image = MockImage as unknown as typeof Image;
 
 const source: NoteSource = {
   id: 'source',
@@ -74,7 +78,7 @@ describe('convertImageSource', () => {
       toDataURL: jest.fn(() => `data:image/png;base64,${Buffer.from('png-data').toString('base64')}`),
     } as unknown as MockCanvas;
 
-    global.document = {
+    globalThis.document = {
       createElement: jest.fn(() => canvas),
     } as unknown as Document;
 
@@ -85,11 +89,13 @@ describe('convertImageSource', () => {
 
   afterEach(() => {
     readFileMock.mockReset();
-    global.document = originalDocument;
+    globalThis.document = originalDocument;
   });
 
   afterAll(() => {
-    global.Image = OriginalImage;
+    if (OriginalImage) {
+      globalThis.Image = OriginalImage;
+    }
     consoleErrorSpy.mockRestore();
   });
 
@@ -109,7 +115,7 @@ describe('convertImageSource', () => {
   });
 
   it('returns null and logs when the canvas context cannot be created', async () => {
-    (global.document as Document).createElement = jest.fn(() => ({
+    (globalThis.document as Document).createElement = jest.fn(() => ({
       getContext: () => null,
     })) as unknown as Document['createElement'];
 

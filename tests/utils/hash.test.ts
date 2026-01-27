@@ -2,7 +2,10 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { hashFile } from 'src/utils/hash';
+
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
 
 describe('hashFile', () => {
   let tempDir: string;
