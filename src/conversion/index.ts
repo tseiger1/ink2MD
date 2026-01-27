@@ -17,6 +17,6 @@ export async function convertSourceToPng(
   if (source.format === 'pdf') {
     return convertPdfSource(source, options.attachmentMaxWidth, options.pdfDpi);
   }
-  console.info(`[ink2md] Unsupported format ${source.format}. Skipping ${source.filePath}`);
+  console.warn(`[ink2md] Unsupported format for ${source.filePath}. Skipping source.`);
   return null;
 }

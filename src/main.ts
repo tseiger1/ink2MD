@@ -36,11 +36,6 @@ const PROVIDER_SECRET_PREFIX: Record<SecretProvider, string> = {
 	'azure-openai': `${AZURE_OPENAI_SECRET_ID}-`,
 	gemini: `${GEMINI_SECRET_ID}-`,
 };
-const PROVIDER_SECRET_ID: Record<SecretProvider, string> = {
-	openai: OPENAI_SECRET_ID,
-	'azure-openai': AZURE_OPENAI_SECRET_ID,
-	gemini: GEMINI_SECRET_ID,
-};
 
 type SourceFingerprint = {
 	hash: string;

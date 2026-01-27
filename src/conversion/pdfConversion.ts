@@ -1,3 +1,4 @@
+import { Buffer } from 'buffer';
 import { promises as fs } from 'fs';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentProxy } from 'pdfjs-dist';

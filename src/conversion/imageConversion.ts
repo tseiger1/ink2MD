@@ -1,3 +1,4 @@
+import { Buffer } from 'buffer';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { ConvertedNote, NoteSource } from '../types';
@@ -38,7 +39,14 @@ async function loadImage(data: Buffer, mime: string): Promise<HTMLImageElement> 
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = (event) => reject(event);
+    image.onerror = (event) => {
+      if (event instanceof ErrorEvent && event.error instanceof Error) {
+        reject(event.error);
+        return;
+      }
+      const message = event instanceof ErrorEvent ? event.message : 'Unknown error while loading image buffer.';
+      reject(new Error(`Failed to load image buffer: ${message}`));
+    };
     image.src = `data:${mime};base64,${data.toString('base64')}`;
   });
 }

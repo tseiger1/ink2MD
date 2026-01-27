@@ -1,6 +1,6 @@
 import { AbstractInputSuggest, App, Modal, Notice, PluginSettingTab, Setting, SliderComponent, TextComponent, setIcon } from 'obsidian';
 import Ink2MDPlugin from './main';
-import { Ink2MDSettings, LLMGenerationMode, LLMProvider, LLMPreset, SourceConfig, SourceType } from './types';
+import { Ink2MDSettings, LLMProvider, LLMPreset, SourceConfig, SourceType } from './types';
 
 type PresetSecretState = {
   hasSecret: boolean;
@@ -302,7 +302,6 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           .onChange((value) => {
             const previousLabel = draft.label;
             const raw = value.trim();
-            const labelIndex = this.plugin.settings.sources.indexOf(draft);
             const defaultLabel = this.getDefaultLabelForType(
               draft.type ?? 'filesystem',
               this.getAutoLabelPositionFor(draft, draft.type ?? 'filesystem'),

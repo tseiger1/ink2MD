@@ -51,7 +51,7 @@ export class GeminiVisionProvider {
     const payload = await this.buildContentPayload(note, llmMaxWidth);
     let emitted = false;
     let accumulated = '';
-    console.log('[ink2md] Gemini streaming start');
+    console.debug('[ink2md] Gemini streaming start');
     try {
       const stream = await this.ai.models.generateContentStream({
         model: this.normalizeModelName(this.config.model),
@@ -59,7 +59,7 @@ export class GeminiVisionProvider {
         config: payload.config,
       });
       for await (const chunk of stream) {
-        console.log('[ink2md] Gemini chunk', chunk);
+        console.debug('[ink2md] Gemini chunk', chunk);
         const text = chunk?.text;
         if (text) {
           const delta = text.startsWith(accumulated) ? text.slice(accumulated.length) : text;
@@ -74,7 +74,7 @@ export class GeminiVisionProvider {
       console.warn('[ink2md] Gemini streaming failed; falling back to batch.', error);
     }
     if (!emitted) {
-      console.log('[ink2md] Gemini stream produced no chunks; falling back to batch response.');
+      console.debug('[ink2md] Gemini stream produced no chunks; falling back to batch response.');
       const fallback = await this.generateMarkdown(note, llmMaxWidth, signal);
       if (fallback) {
         await handler(fallback);
