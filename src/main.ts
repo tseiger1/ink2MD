@@ -87,14 +87,14 @@ interface ImportRunOptions {
     });
 
     this.addCommand({
-      id: 'ink2md-import',
+      id: 'import-handwritten-notes',
       name: 'Import handwritten notes',
       callback: () => this.triggerImport(),
     });
 
     this.addCommand({
-      id: 'ink2md-open-dropzone',
-      name: 'Open Ink2MD dropzone',
+      id: 'open-dropzone-view',
+      name: 'Open dropzone view',
       callback: () => this.activateDropzoneView(true),
     });
 

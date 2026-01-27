@@ -1,7 +1,17 @@
+import { requestUrl } from 'obsidian';
 import { ConvertedNote, LocalProviderSettings, MarkdownStreamHandler } from '../types';
 import { scalePngBufferToDataUrl } from '../utils/pngScaler';
 
 const SYSTEM_PROMPT = 'You are an offline assistant that reads handwriting images and emits Markdown summaries. Reply with valid Markdown only.';
+
+interface LocalStreamTextPart {
+	type?: string;
+	text?: string;
+}
+
+interface LocalStreamDelta {
+	content?: string | LocalStreamTextPart[];
+}
 
 type VisionContent = Array<
   | { type: 'text'; text: string }
@@ -33,22 +43,23 @@ type VisionContent = Array<
 			],
 		};
 
-			const response = await fetch(this.config.endpoint, {
-				method: 'POST',
-				headers,
-				body: JSON.stringify(body),
-				signal,
-			});
+		const response = await requestWithAbort(signal, () =>
+			requestUrl({
+			url: this.config.endpoint,
+			method: 'POST',
+			headers,
+			body: JSON.stringify(body),
+			}),
+		);
 
-    if (!response.ok) {
-      throw new Error(`Local vision endpoint responded with ${response.status} ${response.statusText}`);
-    }
+		if (response.status < 200 || response.status >= 300) {
+			throw new Error(`Local vision endpoint responded with ${response.status}`);
+		}
 
-    const payload = await response.json();
-    const text: string | undefined = payload?.choices?.[0]?.message?.content;
-    if (!text) {
-      throw new Error('Local vision endpoint did not return any content.');
-    }
+		const text = extractCompletionContent(response.json as unknown);
+		if (!text) {
+			throw new Error('Local vision endpoint did not return any content.');
+		}
 		return text.trim();
 	}
 
@@ -80,22 +91,24 @@ type VisionContent = Array<
 			],
 		};
 
-		const response = await fetch(this.config.endpoint, {
+		const response = await requestWithAbort(signal, () =>
+			requestUrl({
+			url: this.config.endpoint,
 			method: 'POST',
 			headers,
 			body: JSON.stringify(body),
-			signal,
-		});
+			}),
+		);
 
-		if (!response.ok) {
-			throw new Error(`Local vision endpoint responded with ${response.status} ${response.statusText}`);
+		if (response.status < 200 || response.status >= 300) {
+			throw new Error(`Local vision endpoint responded with ${response.status}`);
 		}
 
-		if (!response.body) {
-			throw new Error('Local vision endpoint did not return a readable stream.');
+		if (!response.text) {
+			throw new Error('Local vision endpoint did not return a streaming payload.');
 		}
 
-		await consumeSSE(response.body, handler);
+		await processSSEPayload(response.text, handler, signal);
 	}
 }
 
@@ -120,79 +133,135 @@ async function buildVisionContent(
 	return content;
 }
 
-async function consumeSSE(stream: ReadableStream<Uint8Array>, handler: MarkdownStreamHandler) {
-	const reader = stream.getReader();
-	const decoder = new TextDecoder();
-	let buffer = '';
-	while (true) {
-		const { value, done } = await reader.read();
-		if (done) {
-			buffer += decoder.decode();
-			await drainBuffer(buffer, handler);
-			break;
-		}
-		buffer += decoder.decode(value, { stream: true });
-		const result = await drainBuffer(buffer, handler);
-		buffer = result.remaining;
-		if (result.done) {
-			return;
-		}
+function extractCompletionContent(payload: unknown): string | null {
+	if (!isRecord(payload)) {
+		return null;
 	}
+	const choices = payload.choices;
+	if (!Array.isArray(choices) || !choices.length) {
+		return null;
+	}
+	const firstChoice = choices.find(isRecord);
+	if (!firstChoice) {
+		return null;
+	}
+	const messageRecord = 'message' in firstChoice && isRecord(firstChoice.message) ? firstChoice.message : null;
+	if (!messageRecord) {
+		return null;
+	}
+	const content = 'content' in messageRecord ? messageRecord.content : undefined;
+	return typeof content === 'string' ? content : null;
 }
 
-async function drainBuffer(buffer: string, handler: MarkdownStreamHandler): Promise<{ remaining: string; done: boolean }> {
-	let rest = buffer;
-	while (true) {
-		const newlineIndex = rest.indexOf('\n');
-		if (newlineIndex === -1) {
+async function processSSEPayload(payload: string, handler: MarkdownStreamHandler, signal?: AbortSignal) {
+	const lines = payload.split('\n');
+	for (const rawLine of lines) {
+		if (signal?.aborted) {
+			throw createAbortError();
+		}
+		const line = rawLine.trim();
+		if (!line || !line.startsWith('data:')) {
+			continue;
+		}
+		const data = line.slice(5).trim();
+		if (!data) {
+			continue;
+		}
+		if (data === '[DONE]') {
 			break;
 		}
-		const rawLine = rest.slice(0, newlineIndex).trim();
-		rest = rest.slice(newlineIndex + 1);
-		if (!rawLine) {
-			continue;
-		}
-		if (!rawLine.startsWith('data:')) {
-			continue;
-		}
-		const payload = rawLine.slice(5).trim();
-		if (!payload) {
-			continue;
-		}
-		if (payload === '[DONE]') {
-			return { remaining: '', done: true };
-		}
-			try {
-				const parsed = JSON.parse(payload);
-				await emitLocalStreamContent(parsed?.choices?.[0]?.delta, handler);
-			} catch (error) {
-				console.error('[ink2md] Failed to parse streaming payload', error);
+		try {
+			const parsed: unknown = JSON.parse(data);
+			const delta = extractDeltaFromChunk(parsed);
+			if (delta) {
+				await emitLocalStreamContent(delta, handler);
 			}
+		} catch (error) {
+			console.error('[ink2md] Failed to parse streaming payload', error);
 		}
-		return { remaining: rest, done: false };
+	}
 }
 
-async function emitLocalStreamContent(delta: unknown, handler: MarkdownStreamHandler) {
-	const content = typeof delta === 'object' && delta !== null && 'content' in (delta as Record<string, unknown>)
-		? (delta as { content?: unknown }).content
-		: delta;
-	if (!content) {
-		return;
+function extractDeltaFromChunk(chunk: unknown): LocalStreamDelta | null {
+	if (!isRecord(chunk)) {
+		return null;
 	}
+	const choices = chunk.choices;
+	if (!Array.isArray(choices) || !choices.length) {
+		return null;
+	}
+	const firstChoice = choices.find(isRecord);
+	if (!firstChoice) {
+		return null;
+	}
+	const deltaRecord = 'delta' in firstChoice && isRecord(firstChoice.delta) ? firstChoice.delta : null;
+	if (!deltaRecord) {
+		return null;
+	}
+	const content = 'content' in deltaRecord ? deltaRecord.content : undefined;
 	if (typeof content === 'string') {
-		if (content) {
-			await handler(content);
-		}
-		return;
+		return { content };
 	}
 	if (Array.isArray(content)) {
-		for (const part of content) {
-			if (part && typeof part === 'object' && (part as { type?: string; text?: string }).type === 'text') {
-				const text = (part as { text?: string }).text;
-				if (text) {
-					await handler(text);
-				}
-			}
+		const textParts = content.filter(isStreamTextPart);
+		return { content: textParts };
+	}
+	return { content: undefined };
+}
+
+function isStreamTextPart(value: unknown): value is LocalStreamTextPart {
+	return typeof value === 'object' && value !== null;
+}
+
+async function emitLocalStreamContent(delta: LocalStreamDelta | null, handler: MarkdownStreamHandler) {
+	if (!delta || !delta.content) {
+		return;
+	}
+	if (typeof delta.content === 'string') {
+		const text = delta.content.trim();
+		if (text) {
+			await handler(text);
+		}
+		return;
+	}
+	for (const part of delta.content) {
+		if (part?.type === 'text' && part.text) {
+			await handler(part.text);
 		}
 	}
+}
+
+async function requestWithAbort<T>(signal: AbortSignal | undefined, task: () => Promise<T>): Promise<T> {
+	if (!signal) {
+		return task();
+	}
+	if (signal.aborted) {
+		throw createAbortError();
+	}
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = () => {
+			signal.removeEventListener('abort', onAbort);
+			reject(createAbortError());
+		};
+		signal.addEventListener('abort', onAbort, { once: true });
+		task()
+			.then((value) => {
+				signal.removeEventListener('abort', onAbort);
+				resolve(value);
+			})
+			.catch((error) => {
+				signal.removeEventListener('abort', onAbort);
+				reject(error instanceof Error ? error : new Error(String(error)));
+			});
+	});
+}
+
+function createAbortError(): Error {
+	const error = new Error('Aborted');
+	error.name = 'AbortError';
+	return error;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
 }
