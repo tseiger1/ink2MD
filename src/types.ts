@@ -12,6 +12,8 @@ export interface NoteSource {
 	relativeFolder: string;
 }
 
+import type { Buffer } from 'buffer';
+
 export interface ConvertedPage {
 	pageNumber: number;
 	fileName: string;

@@ -1,3 +1,4 @@
+import { Buffer } from 'buffer';
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
@@ -103,7 +104,11 @@ interface ImportRunOptions {
     this.addSettingTab(new Ink2MDSettingTab(this.app, this));
   }
 
-  async onunload() {
+  onunload(): void {
+    void this.handleUnload();
+  }
+
+  private async handleUnload(): Promise<void> {
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_INK2MD_DROP);
     if (leaves.length) {
       const fallback = this.app.workspace.getMostRecentLeaf(this.app.workspace.rootSplit) ?? this.app.workspace.getLeaf(false);
@@ -129,14 +134,14 @@ interface ImportRunOptions {
 				this.setStatus('Script blocked import');
 				return 'Script blocked';
 			}
-			new Notice('Ink2MD: no sources are ready to import. Configure at least one source with directories and an LLM preset.');
-			this.setStatus('Configuration required');
+				new Notice('No sources are ready to import. Configure at least one source with directories and an LLM preset.');
+				this.setStatus('Configuration required');
 			return 'Configuration required';
 		}
-		return this.processImportJobs(jobs, {
-			preparingNotice: 'Ink2MD: scanning input directories...',
-			preparingStatus: 'Scanning for handwritten notes...',
-		});
+			return this.processImportJobs(jobs, {
+				preparingNotice: 'Ink2MD: scanning input directories...',
+				preparingStatus: 'Scanning for handwritten notes...',
+			});
 		});
 	}
 
@@ -148,13 +153,13 @@ interface ImportRunOptions {
 					.filter((entry) => entry.length > 0),
 				),
 		);
-		if (!normalizedPaths.length) {
-			new Notice('Ink2MD: no files selected for import.');
+			if (!normalizedPaths.length) {
+				new Notice('No files selected for import.');
 			return;
 		}
 		const sourceConfig = this.settings.sources.find((source) => source.id === sourceId && source.type === 'dropzone');
-		if (!sourceConfig) {
-			new Notice('Ink2MD: configure a dropzone source in settings before importing.');
+			if (!sourceConfig) {
+				new Notice('Configure a dropzone source in settings before importing.');
 			return;
 		}
 		const preset = this.resolvePresetForSource(sourceConfig);
@@ -178,22 +183,22 @@ interface ImportRunOptions {
 			}
 			notes.push(this.createManualNoteSource(filePath, format, sourceConfig));
 		}
-		if (!notes.length) {
-			new Notice('Ink2MD: none of the selected files match this source configuration.');
+			if (!notes.length) {
+				new Notice('None of the selected files match this source configuration.');
 			return;
 		}
 		const jobs = notes.map((note) => ({ note, sourceConfig, preset }));
-		await this.withImportLock(() =>
-			this.processImportJobs(jobs, {
-				preparingNotice: 'Ink2MD: preparing dropped files...',
-				preparingStatus: 'Preparing dropped files...',
-			}),
-		);
+			await this.withImportLock(() =>
+				this.processImportJobs(jobs, {
+					preparingNotice: 'Ink2MD: preparing dropped files...',
+					preparingStatus: 'Preparing dropped files...',
+				}),
+			);
 	}
 
 	private async withImportLock(task: () => Promise<string>): Promise<void> {
-		if (this.isImporting) {
-			new Notice('Ink2MD: an import is already running. Click the spinner to cancel.');
+			if (this.isImporting) {
+				new Notice('An import is already running. Click the spinner to cancel.');
 			return;
 		}
 		this.isImporting = true;
@@ -203,9 +208,9 @@ interface ImportRunOptions {
 		let finalStatus = 'Idle';
 		try {
 			finalStatus = await task();
-		} catch (error) {
-			console.error('[ink2md] Import run failed', error);
-			new Notice('Ink2MD: import failed. Check developer console for details.');
+			} catch (error) {
+				console.error('[ink2md] Import run failed', error);
+				new Notice('Import failed. Check developer console for details.');
 			finalStatus = 'Idle';
 		} finally {
 			this.finishImport(finalStatus);
@@ -225,7 +230,7 @@ interface ImportRunOptions {
 				continue;
 			}
 			if (!sourceConfig.directories.length) {
-				new Notice(`Ink2MD: source "${sourceConfig.label}" has no directories configured.`);
+				new Notice(`Source "${sourceConfig.label}" has no directories configured.`);
 				continue;
 			}
 			const preset = this.resolvePresetForSource(sourceConfig);
@@ -252,23 +257,23 @@ interface ImportRunOptions {
 			return true;
 		}
 		this.setStatus(`Running script: ${sourceConfig.label}`);
-		return await new Promise((resolve) => {
-			const cwd = this.getVaultBasePath() ?? undefined;
-			const child = spawn(command, {
-				shell: true,
-				cwd,
-			});
-			let stdout = '';
-			let stderr = '';
-			child.stdout?.on('data', (data) => {
-				stdout += data.toString();
-			});
-			child.stderr?.on('data', (data) => {
-				stderr += data.toString();
-			});
+			return await new Promise((resolve) => {
+				const cwd = this.getVaultBasePath() ?? undefined;
+				const child = spawn(command, {
+					shell: true,
+					cwd,
+				});
+				let stdout = '';
+				let stderr = '';
+				child.stdout?.on('data', (data: Buffer) => {
+					stdout += data.toString();
+				});
+				child.stderr?.on('data', (data: Buffer) => {
+					stderr += data.toString();
+				});
 			child.on('error', (error) => {
 				console.error(`[ink2md] Failed to start pre-import script for ${sourceConfig.label}`, error);
-				new Notice(`Ink2MD: Pre-import script for "${sourceConfig.label}" failed to start (${error.message}).`);
+					new Notice(`Pre-import script for "${sourceConfig.label}" failed to start (${error.message}).`);
 				resolve(false);
 			});
 				child.on('close', (code, signal) => {
@@ -280,7 +285,7 @@ interface ImportRunOptions {
 						if (successMessage.length > 280) {
 							successMessage = `${successMessage.slice(0, 277)}...`;
 						}
-						new Notice(`Ink2MD: script for "${sourceConfig.label}" succeeded (${successMessage}).`);
+							new Notice(`Script for "${sourceConfig.label}" succeeded (${successMessage}).`);
 						resolve(true);
 						return;
 					}
@@ -295,7 +300,7 @@ interface ImportRunOptions {
 					if (message.length > 280) {
 						message = `${message.slice(0, 277)}...`;
 					}
-					new Notice(`Ink2MD: Pre-import script for "${sourceConfig.label}" failed (${message}).`);
+							new Notice(`Pre-import script for "${sourceConfig.label}" failed (${message}).`);
 					console.error(`[ink2md] Pre-import script for ${sourceConfig.label} failed: ${message}`);
 					resolve(false);
 				});
@@ -304,30 +309,30 @@ interface ImportRunOptions {
 
 	private resolvePresetForSource(sourceConfig: SourceConfig): LLMPreset | null {
 		if (!sourceConfig.llmPresetId) {
-			new Notice(`Ink2MD: source "${sourceConfig.label}" is missing an LLM preset.`);
+			new Notice(`Source "${sourceConfig.label}" is missing an LLM preset.`);
 			return null;
 		}
 		const preset = this.getRuntimePreset(sourceConfig.llmPresetId);
-		if (!preset) {
-			new Notice(`Ink2MD: preset linked to "${sourceConfig.label}" was not found.`);
+			if (!preset) {
+				new Notice(`Preset linked to "${sourceConfig.label}" was not found.`);
 			return null;
 		}
-		if (preset.provider === 'openai' && !preset.openAI.apiKey) {
-			new Notice(`Ink2MD: preset "${preset.label}" requires an OpenAI API key.`);
+			if (preset.provider === 'openai' && !preset.openAI.apiKey) {
+				new Notice(`Preset "${preset.label}" requires an OpenAI API key.`);
 			return null;
 		}
 		if (preset.provider === 'azure-openai') {
-			if (!preset.azureOpenAI.apiKey) {
-				new Notice(`Ink2MD: preset "${preset.label}" requires an Azure OpenAI API key.`);
+				if (!preset.azureOpenAI.apiKey) {
+					new Notice(`Preset "${preset.label}" requires an Azure OpenAI API key.`);
 				return null;
 			}
-			if (!preset.azureOpenAI.endpoint || !preset.azureOpenAI.deployment) {
-				new Notice(`Ink2MD: preset "${preset.label}" is missing the Azure endpoint or model name.`);
+				if (!preset.azureOpenAI.endpoint || !preset.azureOpenAI.deployment) {
+					new Notice(`Preset "${preset.label}" is missing the Azure endpoint or model name.`);
 				return null;
 			}
 		}
-		if (preset.provider === 'gemini' && !preset.gemini.apiKey) {
-			new Notice(`Ink2MD: preset "${preset.label}" requires a Gemini API key.`);
+			if (preset.provider === 'gemini' && !preset.gemini.apiKey) {
+				new Notice(`Preset "${preset.label}" requires a Gemini API key.`);
 			return null;
 		}
 		return preset;
@@ -436,10 +441,10 @@ interface ImportRunOptions {
 
 		if (cancelled) {
 			this.setStatus('Cancelled');
-			new Notice('Ink2MD: import cancelled.');
+				new Notice('Import cancelled.');
 			return 'Cancelled';
 		}
-		new Notice(`Ink2MD: imported ${processed} note${processed === 1 ? '' : 's'}.`);
+				new Notice(`Imported ${processed} note${processed === 1 ? '' : 's'}.`);
 		this.setStatus('Idle');
 		return 'Idle';
 	}
@@ -637,8 +642,8 @@ interface ImportRunOptions {
 				}
 				this.cancelRequested = true;
 				this.abortController?.abort();
-				this.setStatus('Cancelling...');
-				new Notice('Ink2MD: cancelling current import...');
+					this.setStatus('Cancelling');
+					new Notice('Cancelling current import...');
 				return;
 			}
 			this.triggerImport().catch((error) => console.error(error));
@@ -650,16 +655,16 @@ interface ImportRunOptions {
 	private async activateDropzoneView(focus = false): Promise<void> {
 		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_INK2MD_DROP);
 		if (existing.length) {
-			if (focus) {
-				this.app.workspace.revealLeaf(existing[0]!);
-			}
+				if (focus) {
+					await this.app.workspace.revealLeaf(existing[0]!);
+				}
 			return;
 		}
 		const rightLeaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf(true);
 		await rightLeaf.setViewState({ type: VIEW_TYPE_INK2MD_DROP, active: focus });
-		if (focus) {
-			this.app.workspace.revealLeaf(rightLeaf);
-		}
+			if (focus) {
+				await this.app.workspace.revealLeaf(rightLeaf);
+			}
 	}
 
 	private setSpinner(active: boolean) {
@@ -672,11 +677,9 @@ interface ImportRunOptions {
 		if (active) {
 			this.pendingSpinnerStop = false;
 			icon.classList.add('is-spinning');
-			icon.style.animationPlayState = 'running';
 		} else {
 			if (icon.classList.contains('is-spinning')) {
 				this.pendingSpinnerStop = true;
-				icon.style.animationPlayState = 'running';
 			} else {
 				this.pendingSpinnerStop = false;
 			}
@@ -1023,12 +1026,10 @@ interface ImportRunOptions {
 
 	private ensureSecretBinding(presetId: string, provider: SecretProvider, storage: SecretStorage): string {
 		const bindings = this.getSecretBindings();
-		if (!bindings[presetId]) {
-			bindings[presetId] = {};
-		}
-		const presetBindings = bindings[presetId]!;
-		if (presetBindings[provider]) {
-			return presetBindings[provider]!;
+		const presetBindings = (bindings[presetId] ??= {});
+		const existingBinding = presetBindings[provider];
+		if (existingBinding) {
+			return existingBinding;
 		}
 		const reusable = this.findReusableSecretId(storage, provider);
 		const existing = new Set<string>();
@@ -1178,7 +1179,7 @@ interface ImportRunOptions {
 			}
 			if (!this.notifiedMissingSecretStorage) {
 				this.notifiedMissingSecretStorage = true;
-				new Notice('Ink2MD: this Obsidian version does not support the secure key vault. Keys are stored with plugin settings instead.');
+				new Notice('This Obsidian version does not support the secure key vault. Keys are stored with plugin settings instead.');
 			}
 			return;
 		}
@@ -1196,9 +1197,9 @@ interface ImportRunOptions {
 		const entry = bindings[presetId];
 		const binding = entry?.openai;
 		const storage = this.getSecretStorage();
-		if (binding) {
-			delete entry!.openai;
-			if (Object.keys(entry!).length === 0) {
+		if (binding && entry) {
+			delete entry.openai;
+			if (Object.keys(entry).length === 0) {
 				delete bindings[presetId];
 			}
 			if (storage) {
@@ -1243,7 +1244,7 @@ interface ImportRunOptions {
 			}
 			if (!this.notifiedMissingSecretStorage) {
 				this.notifiedMissingSecretStorage = true;
-				new Notice('Ink2MD: this Obsidian version does not support the secure key vault. Keys are stored with plugin settings instead.');
+				new Notice('This Obsidian version does not support the secure key vault. Keys are stored with plugin settings instead.');
 			}
 			return;
 		}
@@ -1261,9 +1262,9 @@ interface ImportRunOptions {
 		const entry = bindings[presetId];
 		const binding = entry?.['azure-openai'];
 		const storage = this.getSecretStorage();
-		if (binding) {
-			delete entry!['azure-openai'];
-			if (Object.keys(entry!).length === 0) {
+		if (binding && entry) {
+			delete entry['azure-openai'];
+			if (Object.keys(entry).length === 0) {
 				delete bindings[presetId];
 			}
 			if (storage) {
@@ -1308,7 +1309,7 @@ interface ImportRunOptions {
 			}
 			if (!this.notifiedMissingSecretStorage) {
 				this.notifiedMissingSecretStorage = true;
-				new Notice('Ink2MD: this Obsidian version does not support the secure key vault. Keys are stored with plugin settings instead.');
+				new Notice('This Obsidian version does not support the secure key vault. Keys are stored with plugin settings instead.');
 			}
 			return;
 		}
@@ -1326,9 +1327,9 @@ interface ImportRunOptions {
 		const entry = bindings[presetId];
 		const binding = entry?.gemini;
 		const storage = this.getSecretStorage();
-		if (binding) {
-			delete entry!.gemini;
-			if (Object.keys(entry!).length === 0) {
+		if (binding && entry) {
+			delete entry.gemini;
+			if (Object.keys(entry).length === 0) {
 				delete bindings[presetId];
 			}
 			if (storage) {
@@ -1656,7 +1657,7 @@ interface ImportRunOptions {
 		if (!storage) {
 			if (Object.keys(initialKeys).length) {
 				console.warn('[ink2md] Secret storage unavailable; unable to migrate stored OpenAI API keys.');
-				new Notice('Ink2MD: secure key storage is unavailable. Update Obsidian to keep your OpenAI API keys saved.');
+				new Notice('Secure key storage is unavailable. Update Obsidian to keep your OpenAI API keys saved.');
 			}
 			this.settings.secretBindings = {};
 			for (const preset of this.settings.llmPresets) {

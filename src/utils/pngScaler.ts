@@ -1,3 +1,5 @@
+import { Buffer } from 'buffer';
+
 export async function scalePngBufferToDataUrl(pngBuffer: Buffer, maxWidth: number): Promise<string> {
   if (!maxWidth || maxWidth <= 0) {
     return bufferToDataUrl(pngBuffer);
@@ -26,7 +28,13 @@ function loadImageFromBuffer(buffer: Buffer): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = (event) => reject(event);
+    image.onerror = (event) => {
+      if (event instanceof ErrorEvent && event.error instanceof Error) {
+        reject(event.error);
+        return;
+      }
+      reject(new Error('Failed to load PNG buffer.'));
+    };
     image.src = bufferToDataUrl(buffer);
   });
 }
