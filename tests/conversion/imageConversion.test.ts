@@ -4,8 +4,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, jest } from '@je
 import { convertImageSource } from 'src/conversion/imageConversion';
 import { NoteSource } from 'src/types';
 
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-deprecated */
-
 jest.mock('fs', () => ({
   promises: {
     readFile: jest.fn(),
@@ -114,16 +112,14 @@ describe('convertImageSource', () => {
     expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 
-  it('returns null and logs when the canvas context cannot be created', async () => {
-    (globalThis.document as Document).createElement = jest.fn(() => ({
-      getContext: () => null,
-    })) as unknown as Document['createElement'];
+	it('returns null and logs when the canvas context cannot be created', async () => {
+		canvas.getContext.mockReturnValue(null);
 
-    const result = await convertImageSource(source, 800);
+		const result = await convertImageSource(source, 800);
 
-    expect(result).toBeNull();
-    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to convert image'), expect.any(Error));
-  });
+		expect(result).toBeNull();
+		expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to convert image'), expect.any(Error));
+	});
 
   it('returns null when reading the file fails', async () => {
     readFileMock.mockRejectedValue(new Error('read error'));

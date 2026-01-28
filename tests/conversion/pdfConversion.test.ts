@@ -17,8 +17,6 @@ jest.mock('pdfjs-dist/legacy/build/pdf.mjs', () => {
   };
 });
 
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
-
 type MockCanvas = {
 	width: number;
 	height: number;

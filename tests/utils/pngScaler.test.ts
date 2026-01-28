@@ -2,8 +2,6 @@ import { Buffer } from 'buffer';
 import { afterAll, afterEach, describe, expect, it, jest } from '@jest/globals';
 import { scalePngBufferToDataUrl } from 'src/utils/pngScaler';
 
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/unbound-method */
-
 const ORIGINAL_DOCUMENT = globalThis.document;
 const OriginalImage = (globalThis as typeof globalThis & { Image?: typeof Image }).Image;
 
@@ -32,12 +30,16 @@ class MockImage {
 
 globalThis.Image = MockImage as unknown as typeof Image;
 
+type MockCanvasContext = CanvasRenderingContext2D & {
+	drawImage: jest.Mock;
+};
+
 const withCanvas = ({
   toDataUrlValue = 'data:image/png;base64,canvas',
   context = createMockContext(),
 }: {
   toDataUrlValue?: string;
-  context?: CanvasRenderingContext2D;
+  context?: MockCanvasContext;
 }) => {
   const canvas = {
     width: 0,
@@ -53,10 +55,10 @@ const withCanvas = ({
   return { canvas, context };
 };
 
-function createMockContext(): CanvasRenderingContext2D {
+function createMockContext(): MockCanvasContext {
   return {
     drawImage: jest.fn(),
-  } as unknown as CanvasRenderingContext2D;
+  } as unknown as MockCanvasContext;
 }
 
 describe('scalePngBufferToDataUrl', () => {

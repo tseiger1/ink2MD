@@ -1,11 +1,8 @@
 import { Buffer } from 'buffer';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { buildVisionMessage, emitStreamContent } from 'src/llm/openaiProvider';
-import type { ChatCompletionContentPart } from 'src/llm/openaiProvider';
 import { ConvertedNote } from 'src/types';
 import { scalePngBufferToDataUrl } from 'src/utils/pngScaler';
-
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-redundant-type-constituents */
 
 jest.mock('src/utils/pngScaler', () => ({
   scalePngBufferToDataUrl: jest.fn(async (data: Buffer, maxWidth: number) => `scaled:${data.toString('hex')}:${maxWidth}`),
@@ -63,11 +60,11 @@ describe('emitStreamContent', () => {
     const handler = jest.fn();
 
     await emitStreamContent('chunk-one', handler);
-    const mixedParts: (ChatCompletionContentPart | string)[] = [
+		const mixedParts = [
       { type: 'text', text: 'chunk-two' },
       { type: 'text', text: '' },
       'chunk-three',
-    ];
+		] as const;
     await emitStreamContent(mixedParts, handler);
     await emitStreamContent(null, handler);
 
