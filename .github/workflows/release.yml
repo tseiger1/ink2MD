@@ -38,7 +38,7 @@ jobs:
               run: npm run build
 
             - name: Generate release notes
-              run: npx conventional-changelog-cli@5.0.3 -p conventionalcommits -r 1 > RELEASE_NOTES.md
+              run: npx conventional-changelog-cli@5.0.1 -p conventionalcommits -r 1 > RELEASE_NOTES.md
 
             - name: Upload workflow artifacts
               uses: actions/upload-artifact@v4
