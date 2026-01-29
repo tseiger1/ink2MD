@@ -10,9 +10,10 @@ export function buildMarkdown({ note, llmMarkdown, imageEmbeds }: MarkdownGenera
 }
 
 export function buildFrontMatter(note: ConvertedNote): string {
+	const sourcePath = note.source.originalPath ?? note.source.filePath;
 	return [
 		'---',
-		`source: ${note.source.filePath}`,
+		`source: ${sourcePath}`,
 		`imported: ${new Date().toISOString()}`,
 		`pages: ${note.pages.length}`,
 		`format: ${note.source.format}`,

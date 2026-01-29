@@ -65,10 +65,16 @@ const source: NoteSource = {
 const originalDocument = globalThis.document;
 const originalWindow = globalThis.window;
 const originalBlob = (globalThis as typeof globalThis & { Blob?: typeof Blob }).Blob;
+const builtinBlob =
+	typeof Blob !== 'undefined'
+		? Blob
+		: (class PlaceholderBlob {
+			constructor(_parts?: BlobPart[], _options?: BlobPropertyBag) {}
+		} as unknown as typeof Blob);
 const originalURL = globalThis.URL;
 
 beforeAll(async () => {
-	const BlobBase = originalBlob ?? Blob;
+	const BlobBase = originalBlob ?? builtinBlob;
 	(globalThis as typeof globalThis & { Blob?: typeof Blob }).Blob = class MockBlob extends BlobBase {
 		constructor(parts?: BlobPart[], options?: BlobPropertyBag) {
 			super(parts ?? [], options);
@@ -98,7 +104,7 @@ const createPage = (pageNumber: number): MockPdfPage => {
 
 describe('convertPdfSource', () => {
   const readFileMock = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
-  let getDocumentMock: jest.MockedFunction<typeof pdfjsLib.getDocument>;
+  let getDocumentMock: jest.MockedFunction<typeof pdfjsLib.getDocument> | null = null;
   const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
   beforeEach(() => {
@@ -126,7 +132,7 @@ describe('convertPdfSource', () => {
 
 afterEach(() => {
 	readFileMock.mockReset();
-	getDocumentMock.mockReset();
+	getDocumentMock?.mockReset();
 	globalThis.document = originalDocument;
 });
 

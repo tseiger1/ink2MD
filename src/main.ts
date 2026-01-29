@@ -44,6 +44,10 @@ type SourceFingerprint = {
 	mtimeMs: number;
 };
 
+type DroppedFileMetadata = {
+	displayName?: string;
+};
+
 type StoredSettingsSnapshot = Partial<
 	Omit<Ink2MDSettings, 'processedSources' | 'secretBindings'>
 > & {
@@ -201,15 +205,24 @@ interface ImportRunOptions {
 		});
 	}
 
-	async importDroppedFiles(sourceId: string, filePaths: string[]) {
-		const normalizedPaths = Array.from(
-			new Set(
-				filePaths
-					.map((filePath) => (typeof filePath === 'string' ? filePath.trim() : ''))
-					.filter((entry) => entry.length > 0),
-				),
-		);
-			if (!normalizedPaths.length) {
+	async importDroppedFiles(
+		sourceId: string,
+		filePaths: string[],
+		metadata?: Record<string, DroppedFileMetadata>,
+	) {
+		const normalizedEntries: Array<{ path: string; displayName?: string }> = [];
+		const seen = new Set<string>();
+		for (const rawPath of filePaths ?? []) {
+			const trimmedPath = typeof rawPath === 'string' ? rawPath.trim() : '';
+			if (!trimmedPath || seen.has(trimmedPath)) {
+				continue;
+			}
+			seen.add(trimmedPath);
+			const entryMeta = metadata?.[rawPath] ?? metadata?.[trimmedPath];
+			const displayName = entryMeta?.displayName?.trim();
+			normalizedEntries.push({ path: trimmedPath, displayName });
+		}
+			if (!normalizedEntries.length) {
 				new Notice('No files selected for import.');
 			return;
 		}
@@ -227,17 +240,18 @@ interface ImportRunOptions {
 			return;
 		}
 		const notes: NoteSource[] = [];
-		for (const filePath of normalizedPaths) {
-			const format = this.detectFormatForPath(filePath);
+		for (const entry of normalizedEntries) {
+			const { path: normalizedPath, displayName } = entry;
+			const format = this.detectFormatForPath(normalizedPath);
 			if (!format) {
-				console.warn(`[ink2md] Unsupported file dropped: ${filePath}`);
+				console.warn(`[ink2md] Unsupported file dropped: ${normalizedPath}`);
 				continue;
 			}
 			if (!this.isFormatEnabled(format, sourceConfig)) {
-				console.warn(`[ink2md] ${format} imports disabled for ${sourceConfig.label}. Skipping ${filePath}`);
+				console.warn(`[ink2md] ${format} imports disabled for ${sourceConfig.label}. Skipping ${normalizedPath}`);
 				continue;
 			}
-			notes.push(this.createManualNoteSource(filePath, format, sourceConfig));
+			notes.push(this.createManualNoteSource(normalizedPath, format, sourceConfig, displayName));
 		}
 			if (!notes.length) {
 				new Notice('None of the selected files match this source configuration.');
@@ -529,15 +543,23 @@ interface ImportRunOptions {
 		return false;
 	}
 
-	private createManualNoteSource(filePath: string, format: InputFormat, sourceConfig: SourceConfig): NoteSource {
+	private createManualNoteSource(
+		filePath: string,
+		format: InputFormat,
+		sourceConfig: SourceConfig,
+		providedDisplayName?: string,
+	): NoteSource {
+		const displayName = this.resolveDisplayNameForDrop(filePath, providedDisplayName);
+		const basename = this.buildBasenameForDrop(filePath, displayName);
 		return {
 			id: createStableId(filePath, sourceConfig.id),
 			sourceId: sourceConfig.id,
 			format,
 			filePath,
-			basename: slugifyFilePath(filePath),
+			basename,
 			inputRoot: path.dirname(filePath),
 			relativeFolder: '',
+			originalPath: displayName ?? undefined,
 		};
 	}
 
@@ -996,14 +1018,15 @@ interface ImportRunOptions {
 		return (this.settings.sources ?? []).filter((source) => source.type === 'dropzone');
 	}
 
-	async stageDroppedFile(fileName: string, data: ArrayBuffer): Promise<string> {
+	async stageDroppedFile(fileName: string, data: ArrayBuffer): Promise<{ path: string; displayName: string }> {
 		const dir = await this.ensureDropzoneCacheDir();
 		const safeName = this.sanitizeTempFileName(fileName);
 		const uniqueName = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
 		const stagedPath = path.join(dir, uniqueName);
 		await fs.writeFile(stagedPath, Buffer.from(data));
 		this.stagedFiles.add(stagedPath);
-		return stagedPath;
+		const displayName = fileName?.trim()?.length ? fileName.trim() : safeName;
+		return { path: stagedPath, displayName };
 	}
 
 	async cleanupStagedFiles(paths: string[]) {
@@ -1031,6 +1054,34 @@ interface ImportRunOptions {
 		const trimmed = name?.trim() || 'file';
 		const sanitized = trimmed.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
 		return sanitized || 'file';
+	}
+
+	private resolveDisplayNameForDrop(filePath: string, provided?: string): string | null {
+		if (provided?.trim()) {
+			return provided.trim();
+		}
+		const basename = path.basename(filePath);
+		if (this.dropzoneCacheDir && filePath.startsWith(this.dropzoneCacheDir)) {
+			const parts = basename.split('-');
+			if (parts.length >= 3) {
+				return parts.slice(2).join('-');
+			}
+		}
+		return basename || null;
+	}
+
+	private buildBasenameForDrop(filePath: string, displayName: string | null): string {
+		const fallback = slugifyFilePath(filePath);
+		if (!displayName) {
+			return fallback;
+		}
+		const trimmed = displayName.trim();
+		if (!trimmed) {
+			return fallback;
+		}
+		const withoutExt = trimmed.replace(/\.[^.]+$/, '');
+		const sanitized = withoutExt.replace(/[\\/:*?"<>|]/g, '').trim();
+		return sanitized.length ? sanitized : fallback;
 	}
 
 	private generateSecretSuffix(): string {
@@ -1563,6 +1614,7 @@ interface ImportRunOptions {
 	} {
 		const presetId = this.generateId('preset');
 		const sourceId = this.generateId('source');
+		const dropzoneId = this.generateId('source');
 		const openAIKeys: Record<string, string> = {};
 		const azureOpenAIKeys: Record<string, string> = {};
 		const geminiKeys: Record<string, string> = {};
@@ -1570,6 +1622,8 @@ interface ImportRunOptions {
 		const legacyGenerationMode = raw?.llmGenerationMode ?? 'batch';
 		const defaultPresetTemplate = DEFAULT_SETTINGS.llmPresets[0]!;
 		const defaultSourceTemplate = DEFAULT_SETTINGS.sources[0]!;
+		const defaultDropzoneTemplate =
+			DEFAULT_SETTINGS.sources.find((source) => source.type === 'dropzone') ?? defaultSourceTemplate;
 		const legacyPrompt = raw?.openAI?.promptTemplate ?? defaultPresetTemplate.openAI.promptTemplate;
 		const legacyLocalPrompt = raw?.local?.promptTemplate ?? defaultPresetTemplate.local.promptTemplate;
 		const preset: LLMPreset = {
@@ -1623,6 +1677,24 @@ interface ImportRunOptions {
 			type: 'filesystem',
 			preImportScript: '',
 		};
+		const dropzone: SourceConfig = {
+			...defaultDropzoneTemplate,
+			id: dropzoneId,
+			label: defaultDropzoneTemplate.label ?? 'Dropzone target',
+			type: 'dropzone',
+			directories: [],
+			recursive: false,
+			includeImages: defaultDropzoneTemplate.includeImages,
+			includePdfs: defaultDropzoneTemplate.includePdfs,
+			attachmentMaxWidth: defaultDropzoneTemplate.attachmentMaxWidth,
+			pdfDpi: defaultDropzoneTemplate.pdfDpi,
+			replaceExisting: defaultDropzoneTemplate.replaceExisting,
+			outputFolder: defaultDropzoneTemplate.outputFolder,
+			openGeneratedNotes: defaultDropzoneTemplate.openGeneratedNotes,
+			openInNewLeaf: defaultDropzoneTemplate.openInNewLeaf,
+			llmPresetId: presetId,
+			preImportScript: '',
+		};
 		const processedSources: Record<string, ProcessedSourceInfo> = {};
 		const rawProcessed = raw?.processedSources ?? {};
 		for (const [key, entry] of Object.entries(rawProcessed)) {
@@ -1636,7 +1708,7 @@ interface ImportRunOptions {
 		}
 		return {
 			settings: {
-				sources: [source],
+				sources: [source, dropzone],
 				llmPresets: [preset],
 				processedSources,
 				secretBindings: {},

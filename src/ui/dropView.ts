@@ -154,14 +154,21 @@ export class Ink2MDDropView extends ItemView {
 			new Notice('Configure a dropzone source first.');
 			return;
 		}
-    const { paths, staged } = await this.resolveFilePaths(files);
-		if (!paths.length) {
-			new Notice('Unable to read file paths from the dropped files.');
-			return;
-		}
+    const { entries, staged } = await this.resolveFilePaths(files);
+    if (!entries.length) {
+      new Notice('Unable to read file paths from the dropped files.');
+      return;
+    }
+    const paths = entries.map((entry) => entry.path);
+    const metadata: Record<string, { displayName?: string }> = {};
+    for (const entry of entries) {
+      if (entry.displayName) {
+        metadata[entry.path] = { displayName: entry.displayName };
+      }
+    }
     this.setStatus(`Importing ${paths.length} file${paths.length === 1 ? '' : 's'}...`);
     try {
-      await this.plugin.importDroppedFiles(source.id, paths);
+      await this.plugin.importDroppedFiles(source.id, paths, metadata);
       this.setStatus('Files queued for import.');
     } catch (error) {
       console.error('[ink2md] Failed to import dropped files', error);
@@ -173,25 +180,27 @@ export class Ink2MDDropView extends ItemView {
     }
   }
 
-  private async resolveFilePaths(files: File[]): Promise<{ paths: string[]; staged: string[] }> {
-    const resolved: string[] = [];
+  private async resolveFilePaths(files: File[]): Promise<{ entries: Array<{ path: string; displayName?: string }>; staged: string[] }> {
+    const entries: Array<{ path: string; displayName?: string }> = [];
     const staged: string[] = [];
     for (const file of files) {
       const nativePath = (file as File & { path?: string }).path;
       if (nativePath && nativePath.length > 0) {
-        resolved.push(nativePath);
+        const trimmed = nativePath.trim();
+        entries.push({ path: trimmed, displayName: file.name?.trim() });
         continue;
       }
       try {
         const buffer = await file.arrayBuffer();
-        const stagedPath = await this.plugin.stageDroppedFile(file.name ?? 'file', buffer);
-        resolved.push(stagedPath);
+        const stagedResult = await this.plugin.stageDroppedFile(file.name ?? 'file', buffer);
+        const stagedPath = stagedResult.path.trim();
+        entries.push({ path: stagedPath, displayName: stagedResult.displayName });
         staged.push(stagedPath);
       } catch (error) {
         console.error('[ink2md] Unable to stage dropped file', error);
       }
     }
-    return { paths: resolved, staged };
+    return { entries, staged };
   }
 
   private setStatus(message: string) {

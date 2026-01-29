@@ -1,6 +1,6 @@
 {
   "name": "ink2md",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Import handwritten notes from disk, convert pages to PNG, and ask a vision LLM to produce Markdown.",
   "main": "main.js",
   "type": "module",
@@ -8,7 +8,7 @@
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "version": "node version-bump.mjs && git add manifest.json versions.json",
-    "lint": "eslint .",
+    "lint": "node -r ./scripts/eslint-polyfill.cjs ./node_modules/eslint/bin/eslint.js",
     "test": "jest"
   },
   "keywords": [
@@ -21,6 +21,7 @@
     "node": ">=20.0.0"
   },
   "devDependencies": {
+    "@esbuild/darwin-arm64": "^0.25.5",
     "@eslint/js": "9.30.1",
     "@jest/globals": "^30.2.0",
     "@types/color": "^4.2.0",

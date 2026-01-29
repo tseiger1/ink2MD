@@ -10,6 +10,7 @@ export interface NoteSource {
 	basename: string;
 	inputRoot: string;
 	relativeFolder: string;
+	originalPath?: string;
 }
 
 import type { Buffer } from 'buffer';
