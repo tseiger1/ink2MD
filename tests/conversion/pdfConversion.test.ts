@@ -182,7 +182,11 @@ afterAll(() => {
     const failingTask: MockPdfLoadingTask = {
       promise: Promise.reject(new Error('load error')),
     };
-    getDocumentMock.mockReturnValueOnce(failingTask as unknown as PdfLoadingTask);
+    const mock = getDocumentMock;
+    if (!mock) {
+      throw new Error('pdfjs getDocument mock was not initialized');
+    }
+    mock.mockReturnValueOnce(failingTask as unknown as PdfLoadingTask);
 
     const result = await convertPdfSource(source, 600, 144);
     expect(result).toBeNull();
