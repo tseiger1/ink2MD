@@ -13,6 +13,14 @@ fix linting errors. But u# Obsidian community plugin
 - **Bundler: esbuild** (required for this sample - `esbuild.config.mjs` and build scripts depend on it). Alternative bundlers like Rollup or webpack are acceptable for other projects if they bundle all external dependencies into `main.js`.
 - Types: `obsidian` type definitions.
 
+### Commit message rules
+
+- Follow [Conventional Commits](https://www.conventionalcommits.org/) using the format `<type>[optional scope]: <short description>`.
+- Common `type` prefixes: `feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `build`, `ci`.
+- Use lowercase descriptions in the imperative mood (e.g., `feat: add dropzone preset`).
+- Include additional detail in the body when needed, wrapped at ~100 characters per line.
+- Each commit should represent a logical change so release notes can be generated automatically.
+
 **Note**: This sample project has specific technical dependencies on npm and esbuild. If you're creating a plugin from scratch, you can choose different tools, but you'll need to replace the build configuration accordingly.
 
 ### Install
