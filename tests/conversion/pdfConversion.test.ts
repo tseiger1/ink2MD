@@ -17,30 +17,36 @@ jest.mock('pdfjs-dist/legacy/build/pdf.mjs', () => {
   };
 });
 
+type MockCanvasContext = CanvasRenderingContext2D & {
+	drawImage: jest.Mock;
+};
+
 type MockCanvas = {
 	width: number;
 	height: number;
-	getContext: jest.Mock;
-	toDataURL: jest.Mock;
+	getContext: jest.MockedFunction<() => MockCanvasContext | null>;
+	toDataURL: jest.MockedFunction<() => string>;
 };
 
 type MockPdfPage = {
 	pageNumber: number;
-	render: jest.Mock<{ promise: Promise<void> }>;
-	getViewport: jest.Mock<{ width: number; height: number }, [{ scale: number }]>;
-	cleanup: jest.Mock;
+	render: jest.MockedFunction<() => { promise: Promise<void> }>;
+	getViewport: jest.MockedFunction<({ scale }: { scale: number }) => { width: number; height: number }>;
+	cleanup: jest.MockedFunction<() => void>;
 };
 
 type MockPdfDocument = {
 	numPages: number;
-	getPage: jest.Mock<Promise<MockPdfPage>, [number]>;
-	destroy: jest.Mock<Promise<void>>;
+	getPage: jest.MockedFunction<(index: number) => Promise<MockPdfPage>>;
+	destroy: jest.MockedFunction<() => Promise<void>>;
 };
 
 type PdfLoadingTask = ReturnType<typeof import('pdfjs-dist/legacy/build/pdf.mjs')['getDocument']>;
 
 type MockPdfLoadingTask = {
 	promise: Promise<MockPdfDocument>;
+	onProgress?: jest.Mock;
+	destroy?: jest.Mock;
 };
 
 let convertPdfSource: typeof import('src/conversion/pdfConversion')['convertPdfSource'];
@@ -62,8 +68,11 @@ const originalBlob = (globalThis as typeof globalThis & { Blob?: typeof Blob }).
 const originalURL = globalThis.URL;
 
 beforeAll(async () => {
-	(globalThis as typeof globalThis & { Blob?: typeof Blob }).Blob = class {
-		constructor(_parts: unknown[], _options?: unknown) {}
+	const BlobBase = originalBlob ?? Blob;
+	(globalThis as typeof globalThis & { Blob?: typeof Blob }).Blob = class MockBlob extends BlobBase {
+		constructor(parts?: BlobPart[], options?: BlobPropertyBag) {
+			super(parts ?? [], options);
+		}
 	};
 	globalThis.URL = {
 		createObjectURL: jest.fn(() => 'blob:mock'),
@@ -176,10 +185,13 @@ afterAll(() => {
 });
 
 function createCanvas(label: string): MockCanvas {
-  return {
-    width: 0,
-    height: 0,
-    getContext: jest.fn(() => ({})),
-    toDataURL: jest.fn(() => `data:image/png;base64,${Buffer.from(label).toString('base64')}`),
-  } as unknown as MockCanvas;
+	const context: MockCanvasContext = {
+		drawImage: jest.fn(),
+	} as unknown as MockCanvasContext;
+	return {
+		width: 0,
+		height: 0,
+		getContext: jest.fn(() => context),
+		toDataURL: jest.fn(() => `data:image/png;base64,${Buffer.from(label).toString('base64')}`),
+	};
 }

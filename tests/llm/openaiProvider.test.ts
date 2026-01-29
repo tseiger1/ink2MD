@@ -1,7 +1,8 @@
 import { Buffer } from 'buffer';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { buildVisionMessage, emitStreamContent } from 'src/llm/openaiProvider';
-import { ConvertedNote } from 'src/types';
+import type { ChatCompletionContentPart } from 'openai/resources/chat/completions';
+import { ConvertedNote, MarkdownStreamHandler } from 'src/types';
 import { scalePngBufferToDataUrl } from 'src/utils/pngScaler';
 
 jest.mock('src/utils/pngScaler', () => ({
@@ -57,20 +58,20 @@ describe('buildVisionMessage', () => {
 
 describe('emitStreamContent', () => {
   it('handles strings, arrays, and ignores empty parts', async () => {
-    const handler = jest.fn();
+    const handler: jest.MockedFunction<MarkdownStreamHandler> = jest.fn();
 
     await emitStreamContent('chunk-one', handler);
-		const mixedParts = [
-      { type: 'text', text: 'chunk-two' },
-      { type: 'text', text: '' },
-      'chunk-three',
-		] as const;
-    await emitStreamContent(mixedParts, handler);
-    await emitStreamContent(null, handler);
+		const mixedParts: ChatCompletionContentPart[] = [
+	      { type: 'text', text: 'chunk-two' },
+	      { type: 'text', text: '' },
+		];
+	    await emitStreamContent(mixedParts, handler);
+	    await emitStreamContent('chunk-three', handler);
+	    await emitStreamContent(null, handler);
 
-    expect(handler).toHaveBeenCalledTimes(3);
-    expect(handler).toHaveBeenNthCalledWith(1, 'chunk-one');
-    expect(handler).toHaveBeenNthCalledWith(2, 'chunk-two');
-    expect(handler).toHaveBeenNthCalledWith(3, 'chunk-three');
+	    expect(handler).toHaveBeenCalledTimes(3);
+	    expect(handler).toHaveBeenNthCalledWith(1, 'chunk-one');
+	    expect(handler).toHaveBeenNthCalledWith(2, 'chunk-two');
+	    expect(handler).toHaveBeenNthCalledWith(3, 'chunk-three');
   });
 });
