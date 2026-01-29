@@ -37,6 +37,9 @@ jobs:
             - name: Build plugin
               run: npm run build
 
+            - name: Generate release notes
+              run: npx conventional-changelog-cli@5.0.3 -p conventionalcommits -r 1 > RELEASE_NOTES.md
+
             - name: Upload workflow artifacts
               uses: actions/upload-artifact@v4
               with:
@@ -50,7 +53,8 @@ jobs:
               with:
                   tag_name: ${{ env.RELEASE_TAG }}
                   name: Release ${{ env.RELEASE_TAG }}
-                  generate_release_notes: true
+                  body_path: RELEASE_NOTES.md
+                  generate_release_notes: false
                   files: |
                       main.js
                       manifest.json
