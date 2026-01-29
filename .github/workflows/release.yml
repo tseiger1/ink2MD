@@ -1,0 +1,50 @@
+name: Release
+
+on:
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Tag to create or update the release with"
+                required: true
+                type: string
+
+jobs:
+    release:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Use Node.js 20
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Build plugin
+              run: npm run build
+
+            - name: Upload workflow artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: release-${{ inputs.tag }}
+                  path: |
+                      main.js
+                      manifest.json
+
+            - name: Create GitHub Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ inputs.tag }}
+                  name: Release ${{ inputs.tag }}
+                  files: |
+                      main.js
+                      manifest.json
