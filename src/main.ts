@@ -430,7 +430,7 @@ interface ImportRunOptions {
 				break;
 			}
 
-			const freshness = await this.evaluateSourceFreshness(source);
+			const freshness = await this.evaluateSourceFreshness(source, sourceConfig);
 			if (!freshness.shouldProcess) {
 				continue;
 			}
@@ -551,8 +551,9 @@ interface ImportRunOptions {
 	): NoteSource {
 		const displayName = this.resolveDisplayNameForDrop(filePath, providedDisplayName);
 		const basename = this.buildBasenameForDrop(filePath, displayName);
+		const idSeed = this.resolveManualDropIdSeed(filePath, displayName, providedDisplayName);
 		return {
-			id: createStableId(filePath, sourceConfig.id),
+			id: createStableId(idSeed, sourceConfig.id),
 			sourceId: sourceConfig.id,
 			format,
 			filePath,
@@ -783,7 +784,10 @@ interface ImportRunOptions {
 		return this.settings.processedSources;
 	}
 
-	private async evaluateSourceFreshness(source: NoteSource): Promise<FreshnessResult> {
+	private async evaluateSourceFreshness(source: NoteSource, sourceConfig: SourceConfig): Promise<FreshnessResult> {
+		if (sourceConfig.type === 'dropzone') {
+			return { shouldProcess: true };
+		}
 		const store = this.ensureProcessedStore();
 		let stats;
 		try {
@@ -833,8 +837,11 @@ interface ImportRunOptions {
 		source: NoteSource,
 		fingerprint?: SourceFingerprint,
 		folderPath?: string,
-		_sourceConfig?: SourceConfig,
+		sourceConfig?: SourceConfig,
 	) {
+		if (sourceConfig?.type === 'dropzone') {
+			return;
+		}
 		const store = this.ensureProcessedStore();
 		const finalFingerprint = fingerprint ?? (await this.computeFingerprint(source));
 		if (!finalFingerprint) {
@@ -1054,6 +1061,22 @@ interface ImportRunOptions {
 		const trimmed = name?.trim() || 'file';
 		const sanitized = trimmed.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
 		return sanitized || 'file';
+	}
+
+	private resolveManualDropIdSeed(filePath: string, displayName: string | null, providedDisplayName?: string): string {
+		const dropzoneDir = this.dropzoneCacheDir;
+		if (!dropzoneDir || !filePath.startsWith(dropzoneDir)) {
+			return filePath;
+		}
+		const trimmedProvided = providedDisplayName?.trim();
+		if (trimmedProvided?.length) {
+			return trimmedProvided;
+		}
+		const trimmedDisplay = displayName?.trim();
+		if (trimmedDisplay?.length) {
+			return trimmedDisplay;
+		}
+		return filePath;
 	}
 
 	private resolveDisplayNameForDrop(filePath: string, provided?: string): string | null {
