@@ -38,7 +38,23 @@ jobs:
               run: npm run build
 
             - name: Generate release notes
-              run: npx conventional-changelog-cli -p conventionalcommits -r 1 > RELEASE_NOTES.md
+              run: |
+                  set -eo pipefail
+                  TARGET_REF="${RELEASE_TAG}"
+                  if ! git rev-parse "$TARGET_REF" >/dev/null 2>&1; then
+                      echo "Tag $TARGET_REF not found. Using HEAD for release notes."
+                      TARGET_REF="HEAD"
+                  fi
+                  PREVIOUS_TAG=$(git describe --tags --abbrev=0 "${TARGET_REF}^" 2>/dev/null || true)
+                  if [ -z "$PREVIOUS_TAG" ]; then
+                      echo "No previous tag detected. Including all commits up to $TARGET_REF."
+                      RANGE="$TARGET_REF"
+                  else
+                      echo "Generating notes from $PREVIOUS_TAG to $TARGET_REF."
+                      RANGE="$PREVIOUS_TAG..$TARGET_REF"
+                  fi
+                  git log --pretty=format:'- %s' $RANGE > RELEASE_NOTES.md
+                  cat RELEASE_NOTES.md
 
             - name: Upload workflow artifacts
               uses: actions/upload-artifact@v4
