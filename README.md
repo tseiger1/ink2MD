@@ -1,11 +1,11 @@
 # Ink2MD
 
-Ink2MD is an Obsidian plugin that brings handwritten notebooks into your vault. It scans configurable folders, turns the discovered pages into PNG files, and asks a vision LLM (OpenAI, DeepSeek, or a local llama-style endpoint) to create Markdown notes for every import.
+Ink2MD is an Obsidian plugin that brings handwritten notebooks into your vault. It scans configurable folders, turns the discovered pages into PNG files, and asks a vision LLM (OpenAI, Anthropic, DeepSeek, or a local llama-style endpoint) to create Markdown notes for every import.
 
 ## Features
 - Watch multiple input directories (with recursive scanning) for handwritten notes.
 - Convert JPG/PNG/WebP images and PDFs into PNG pages with an optional width cap.
-- Generate Markdown summaries through OpenAI, DeepSeek, Google Gemini, or any OpenAI-compatible local endpoint.
+- Generate Markdown summaries through OpenAI, Anthropic, DeepSeek, Google Gemini, or any OpenAI-compatible local endpoint.
 - Store all generated pages and Markdown files inside a dedicated folder in your vault.
 
 ## Setup
@@ -17,7 +17,7 @@ Ink2MD is an Obsidian plugin that brings handwritten notebooks into your vault. 
 ## Configuration
 Open **Settings → Community plugins → Ink2MD** and adjust:
 - **Sources**: each source points at one or more absolute directories, controls which import types (images, PDFs) run, holds conversion options (PNG width, PDF DPI, overwrite policy), and decides whether generated notes open automatically. Every source links to exactly one LLM preset.
-- **LLM presets**: reusable provider profiles containing OpenAI, DeepSeek, Google Gemini, or local endpoint details along with prompt templates, image detail, model name, image-width limits, and whether generation streams live or waits for the full response. Ollama works well out of the box when exposing its OpenAI-compatible server with the `mistral-small:3.1` model.
+- **LLM presets**: reusable provider profiles containing OpenAI, Anthropic, DeepSeek, Google Gemini, or local endpoint details along with prompt templates, image detail, model name, image-width limits, and whether generation streams live or waits for the full response. Ollama works well out of the box when exposing its OpenAI-compatible server with the `mistral-small:3.1` model.
 - **Processed files cache**: clear it globally from the Sources section or per source if you need to force a re-import.
 
 ## Usage
