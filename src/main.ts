@@ -26,16 +26,18 @@ import { isImageFile } from './importers/imageImporter';
 import { isPdfFile } from './importers/pdfImporter';
 import { Ink2MDDropView, VIEW_TYPE_INK2MD_DROP } from './ui/dropView';
 
-type SecretProvider = 'openai' | 'azure-openai' | 'gemini';
+type SecretProvider = 'openai' | 'azure-openai' | 'gemini' | 'deepseek';
 
 const OPENAI_SECRET_ID = 'ink2md-openai-api-key';
 const AZURE_OPENAI_SECRET_ID = 'ink2md-azure-openai-api-key';
 const GEMINI_SECRET_ID = 'ink2md-gemini-api-key';
+const DEEPSEEK_SECRET_ID = 'ink2md-deepseek-api-key';
 const SECRET_SUFFIX_LENGTH = 10;
 const PROVIDER_SECRET_PREFIX: Record<SecretProvider, string> = {
 	openai: `${OPENAI_SECRET_ID}-`,
 	'azure-openai': `${AZURE_OPENAI_SECRET_ID}-`,
 	gemini: `${GEMINI_SECRET_ID}-`,
+	deepseek: `${DEEPSEEK_SECRET_ID}-`,
 };
 
 type SourceFingerprint = {
@@ -64,6 +66,7 @@ type LegacySettingsSnapshot = StoredSettingsSnapshot & {
 	azureOpenAI?: Partial<LLMPreset['azureOpenAI']>;
 	local?: Partial<LLMPreset['local']>;
 	gemini?: Partial<LLMPreset['gemini']>;
+	deepseek?: Partial<LLMPreset['deepseek']>;
 	inputDirectories?: unknown;
 	includeImages?: boolean;
 	includePdfs?: boolean;
@@ -127,6 +130,7 @@ interface ImportRunOptions {
 	private openAISecrets: Record<string, string | null> = {};
 	private azureOpenAISecrets: Record<string, string | null> = {};
 	private geminiSecrets: Record<string, string | null> = {};
+	private deepseekSecrets: Record<string, string | null> = {};
 	private notifiedMissingSecretStorage = false;
 	private stagedFiles = new Set<string>();
 	private dropzoneCacheDir: string | null = null;
@@ -401,6 +405,10 @@ interface ImportRunOptions {
 				return null;
 			}
 		}
+		if (preset.provider === 'deepseek' && !preset.deepseek.apiKey) {
+			new Notice(`Preset "${preset.label}" requires a DeepSeek API key.`);
+			return null;
+		}
 			if (preset.provider === 'gemini' && !preset.gemini.apiKey) {
 				new Notice(`Preset "${preset.label}" requires a Gemini API key.`);
 			return null;
@@ -581,6 +589,7 @@ interface ImportRunOptions {
 		const resolvedOpenAIKey = this.getOpenAISecret(preset.id) || preset.openAI.apiKey;
 		const resolvedAzureKey = this.getAzureOpenAISecret(preset.id) || preset.azureOpenAI.apiKey;
 		const resolvedGeminiKey = this.getGeminiSecret(preset.id) || preset.gemini.apiKey;
+		const resolvedDeepSeekKey = this.getDeepSeekSecret(preset.id) || preset.deepseek.apiKey;
 		return {
 			...preset,
 			openAI: {
@@ -597,6 +606,10 @@ interface ImportRunOptions {
 			gemini: {
 				...preset.gemini,
 				apiKey: resolvedGeminiKey ?? '',
+			},
+			deepseek: {
+				...preset.deepseek,
+				apiKey: resolvedDeepSeekKey ?? '',
 			},
 		};
 	}
@@ -1281,6 +1294,27 @@ interface ImportRunOptions {
 		return null;
 	}
 
+	private readDeepSeekSecretFromStore(presetId: string): string | null {
+		const storage = this.getSecretStorage();
+		if (!storage) {
+			const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+			return preset?.deepseek.apiKey?.trim() || null;
+		}
+		const binding = this.getSecretIdForPreset(presetId, 'deepseek');
+		if (binding) {
+			try {
+				const secret = storage.getSecret(binding);
+				const trimmed = typeof secret === 'string' ? secret.trim() : '';
+				if (trimmed.length > 0) {
+					return trimmed;
+				}
+			} catch (error) {
+				console.warn('[ink2md] Unable to read DeepSeek API key from secret storage.', error);
+			}
+		}
+		return null;
+	}
+
 	getOpenAISecret(presetId: string): string {
 		const cached = this.openAISecrets[presetId];
 		if (cached && cached.length > 0) {
@@ -1476,6 +1510,71 @@ interface ImportRunOptions {
 		}
 	}
 
+	getDeepSeekSecret(presetId: string): string {
+		const cached = this.deepseekSecrets[presetId];
+		if (cached && cached.length > 0) {
+			return cached;
+		}
+		const secret = this.readDeepSeekSecretFromStore(presetId);
+		this.deepseekSecrets[presetId] = secret;
+		return secret ?? '';
+	}
+
+	hasDeepSeekSecret(presetId: string): boolean {
+		return this.getDeepSeekSecret(presetId).length > 0;
+	}
+
+	async setDeepSeekSecret(presetId: string, value: string) {
+		const trimmed = value.trim();
+		this.deepseekSecrets[presetId] = trimmed.length > 0 ? trimmed : null;
+		const storage = this.getSecretStorage();
+		if (!storage) {
+			const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+			if (preset) {
+				preset.deepseek.apiKey = trimmed;
+			}
+			if (trimmed.length === 0 && preset) {
+				preset.deepseek.apiKey = '';
+			}
+			if (!this.notifiedMissingSecretStorage) {
+				this.notifiedMissingSecretStorage = true;
+				new Notice('This Obsidian version does not support the secure key vault. Keys are stored with plugin settings instead.');
+			}
+			return;
+		}
+		try {
+			const binding = this.ensureSecretBinding(presetId, 'deepseek', storage);
+			storage.setSecret(binding, this.deepseekSecrets[presetId] ?? '');
+		} catch (error) {
+			console.error('[ink2md] Unable to persist DeepSeek API key in secret storage.', error);
+		}
+	}
+
+	async deleteDeepSeekSecret(presetId: string) {
+		delete this.deepseekSecrets[presetId];
+		const bindings = this.getSecretBindings();
+		const entry = bindings[presetId];
+		const binding = entry?.deepseek;
+		const storage = this.getSecretStorage();
+		if (binding && entry) {
+			delete entry.deepseek;
+			if (Object.keys(entry).length === 0) {
+				delete bindings[presetId];
+			}
+			if (storage) {
+				try {
+					storage.setSecret(binding, '');
+				} catch (error) {
+					console.error('[ink2md] Unable to clear DeepSeek API key from secret storage.', error);
+				}
+			}
+		}
+		const preset = this.settings.llmPresets.find((entry) => entry.id === presetId);
+		if (preset) {
+			preset.deepseek.apiKey = '';
+		}
+	}
+
 	async loadSettings() {
 		const storedData: unknown = await this.loadData();
 		const stored: StoredSettingsSnapshot | null = isStoredSettingsSnapshot(storedData) ? storedData : null;
@@ -1484,6 +1583,7 @@ interface ImportRunOptions {
 			openAIKeys: Record<string, string>;
 			azureOpenAIKeys: Record<string, string>;
 			geminiKeys: Record<string, string>;
+			deepseekKeys: Record<string, string>;
 		};
 		if (!stored || !Array.isArray(stored.sources) || !Array.isArray(stored.llmPresets)) {
 			normalized = this.migrateLegacySettings(stored ?? undefined);
@@ -1494,6 +1594,7 @@ interface ImportRunOptions {
 		this.initializeOpenAISecrets(normalized.openAIKeys);
 		this.initializeAzureOpenAISecrets(normalized.azureOpenAIKeys);
 		this.initializeGeminiSecrets(normalized.geminiKeys);
+		this.initializeDeepSeekSecrets(normalized.deepseekKeys);
 	}
 
 	async saveSettings() {
@@ -1501,6 +1602,7 @@ interface ImportRunOptions {
 			preset.openAI.apiKey = '';
 			preset.azureOpenAI.apiKey = '';
 			preset.gemini.apiKey = '';
+			preset.deepseek.apiKey = '';
 		}
 		await this.saveData(this.settings);
 		this.refreshDropzoneViews();
@@ -1523,6 +1625,7 @@ interface ImportRunOptions {
 		openAIKeys: Record<string, string>;
 		azureOpenAIKeys: Record<string, string>;
 		geminiKeys: Record<string, string>;
+		deepseekKeys: Record<string, string>;
 	} {
 		const defaultPresetTemplate = DEFAULT_SETTINGS.llmPresets[0]!;
 		const defaultSourceTemplate =
@@ -1573,6 +1676,7 @@ interface ImportRunOptions {
 		const openAIKeys: Record<string, string> = {};
 		const azureOpenAIKeys: Record<string, string> = {};
 		const geminiKeys: Record<string, string> = {};
+		const deepseekKeys: Record<string, string> = {};
 		for (const preset of presets) {
 			if (preset.openAI.apiKey) {
 				openAIKeys[preset.id] = preset.openAI.apiKey;
@@ -1582,6 +1686,9 @@ interface ImportRunOptions {
 			}
 			if (preset.gemini?.apiKey) {
 				geminiKeys[preset.id] = preset.gemini.apiKey;
+			}
+			if (preset.deepseek?.apiKey) {
+				deepseekKeys[preset.id] = preset.deepseek.apiKey;
 			}
 		}
 		const rawBindings = raw.secretBindings ?? {};
@@ -1600,7 +1707,12 @@ interface ImportRunOptions {
 				if (isRecord(binding)) {
 					const entry: Partial<Record<SecretProvider, string>> = {};
 					for (const [providerKey, secretId] of Object.entries(binding)) {
-						if (providerKey === 'openai' || providerKey === 'azure-openai' || providerKey === 'gemini') {
+						if (
+							providerKey === 'openai'
+							|| providerKey === 'azure-openai'
+							|| providerKey === 'gemini'
+							|| providerKey === 'deepseek'
+						) {
 							if (typeof secretId !== 'string') {
 								continue;
 							}
@@ -1626,6 +1738,7 @@ interface ImportRunOptions {
 			openAIKeys,
 			azureOpenAIKeys,
 			geminiKeys,
+			deepseekKeys,
 		};
 	}
 
@@ -1634,6 +1747,7 @@ interface ImportRunOptions {
 		openAIKeys: Record<string, string>;
 		azureOpenAIKeys: Record<string, string>;
 		geminiKeys: Record<string, string>;
+		deepseekKeys: Record<string, string>;
 	} {
 		const presetId = this.generateId('preset');
 		const sourceId = this.generateId('source');
@@ -1641,6 +1755,7 @@ interface ImportRunOptions {
 		const openAIKeys: Record<string, string> = {};
 		const azureOpenAIKeys: Record<string, string> = {};
 		const geminiKeys: Record<string, string> = {};
+		const deepseekKeys: Record<string, string> = {};
 		const legacyProvider = raw?.llmProvider ?? 'openai';
 		const legacyGenerationMode = raw?.llmGenerationMode ?? 'batch';
 		const defaultPresetTemplate = DEFAULT_SETTINGS.llmPresets[0]!;
@@ -1672,12 +1787,19 @@ interface ImportRunOptions {
 			gemini: {
 				...defaultPresetTemplate.gemini,
 			},
+			deepseek: {
+				...defaultPresetTemplate.deepseek,
+				...(raw?.deepseek ?? {}),
+			},
 		};
 		if (preset.openAI.apiKey) {
 			openAIKeys[preset.id] = preset.openAI.apiKey;
 		}
 		if (preset.azureOpenAI.apiKey) {
 			azureOpenAIKeys[preset.id] = preset.azureOpenAI.apiKey;
+		}
+		if (preset.deepseek.apiKey) {
+			deepseekKeys[preset.id] = preset.deepseek.apiKey;
 		}
 		const legacyDirectories = Array.isArray(raw?.inputDirectories)
 			? raw.inputDirectories.filter((entry): entry is string => typeof entry === 'string')
@@ -1739,6 +1861,7 @@ interface ImportRunOptions {
 			openAIKeys,
 			azureOpenAIKeys,
 			geminiKeys,
+			deepseekKeys,
 		};
 	}
 
@@ -1770,6 +1893,10 @@ interface ImportRunOptions {
 			gemini: {
 				...fallback.gemini,
 				...(base.gemini ?? {}),
+			},
+			deepseek: {
+				...fallback.deepseek,
+				...(base.deepseek ?? {}),
 			},
 		};
 	}
@@ -1898,6 +2025,36 @@ interface ImportRunOptions {
 			const resolved = this.readGeminiSecretFromStore(preset.id);
 			this.geminiSecrets[preset.id] = resolved;
 			preset.gemini.apiKey = '';
+		}
+	}
+
+	private initializeDeepSeekSecrets(initialKeys: Record<string, string>) {
+		this.deepseekSecrets = {};
+		const storage = this.getSecretStorage();
+		if (!storage) {
+			if (Object.keys(initialKeys).length) {
+				console.warn('[ink2md] Secret storage unavailable; unable to migrate stored DeepSeek API keys.');
+			}
+			for (const preset of this.settings.llmPresets) {
+				const initial = initialKeys[preset.id]?.trim() || '';
+				this.deepseekSecrets[preset.id] = initial || null;
+				preset.deepseek.apiKey = initial;
+			}
+			return;
+		}
+		for (const preset of this.settings.llmPresets) {
+			const initial = initialKeys[preset.id]?.trim();
+			if (initial) {
+				try {
+					const binding = this.ensureSecretBinding(preset.id, 'deepseek', storage);
+					storage.setSecret(binding, initial);
+				} catch (error) {
+					console.error('[ink2md] Unable to migrate DeepSeek API key into secret storage.', error);
+				}
+			}
+			const resolved = this.readDeepSeekSecretFromStore(preset.id);
+			this.deepseekSecrets[preset.id] = resolved;
+			preset.deepseek.apiKey = '';
 		}
 	}
 

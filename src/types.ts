@@ -63,7 +63,15 @@ export interface GeminiProviderSettings {
 	promptTemplate: string;
 }
 
-export type LLMProvider = 'openai' | 'azure-openai' | 'local' | 'gemini';
+export interface DeepSeekProviderSettings {
+	apiKey: string;
+	baseUrl: string;
+	model: string;
+	promptTemplate: string;
+	imageDetail: 'low' | 'high';
+}
+
+export type LLMProvider = 'openai' | 'azure-openai' | 'local' | 'gemini' | 'deepseek';
 export type LLMGenerationMode = 'batch' | 'stream';
 
 export interface LLMPreset {
@@ -76,6 +84,7 @@ export interface LLMPreset {
 	azureOpenAI: AzureOpenAIProviderSettings;
 	local: LocalProviderSettings;
 	gemini: GeminiProviderSettings;
+	deepseek: DeepSeekProviderSettings;
 }
 
 export interface SourceConfig {
