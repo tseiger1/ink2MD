@@ -704,7 +704,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
     new Setting(container)
       .setName('Model')
-      .setDesc('DeepSeek vision model name, e.g. deepseek-vl.')
+      .setDesc('Vision model name.')
       .addText((text) =>
 		text
 			.setPlaceholder(DEEPSEEK_MODEL_PLACEHOLDER)
