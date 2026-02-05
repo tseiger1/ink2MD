@@ -43,6 +43,7 @@ npm run build
 
 ## Linting
 
+- Run lint and tests before committing changes.
 - To use eslint install eslint from terminal: `npm install -g eslint`
 - To use eslint to analyze this project use this command: `eslint main.ts`
 - eslint will then create a report with suggestions for code improvement by file and line number.
