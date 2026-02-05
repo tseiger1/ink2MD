@@ -1,7 +1,6 @@
-import { Buffer } from 'buffer';
-import { promises as fs } from 'fs';
-import path from 'path';
 import { ConvertedNote, NoteSource } from '../types';
+import { base64ToUint8Array, uint8ArrayToBase64 } from '../utils/base64';
+import { getExtension } from '../utils/path';
 
 const MIME_BY_EXT: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -10,10 +9,14 @@ const MIME_BY_EXT: Record<string, string> = {
   '.webp': 'image/webp',
 };
 
-export async function convertImageSource(source: NoteSource, maxWidth: number): Promise<ConvertedNote | null> {
+export async function convertImageSource(
+	source: NoteSource,
+	maxWidth: number,
+	readFile: (filePath: string) => Promise<ArrayBuffer>,
+): Promise<ConvertedNote | null> {
   try {
-    const buffer = await fs.readFile(source.filePath);
-    const image = await loadImage(buffer, MIME_BY_EXT[path.extname(source.filePath).toLowerCase()] ?? 'image/png');
+    const buffer = new Uint8Array(await readFile(source.filePath));
+    const image = await loadImage(buffer, MIME_BY_EXT[getExtension(source.filePath).toLowerCase()] ?? 'image/png');
     const { canvas, width, height } = drawToCanvas(image, maxWidth);
     const pngBuffer = dataUrlToBuffer(canvas.toDataURL('image/png'));
 
@@ -35,7 +38,7 @@ export async function convertImageSource(source: NoteSource, maxWidth: number): 
   }
 }
 
-async function loadImage(data: Buffer, mime: string): Promise<HTMLImageElement> {
+async function loadImage(data: Uint8Array, mime: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
@@ -47,7 +50,7 @@ async function loadImage(data: Buffer, mime: string): Promise<HTMLImageElement> 
       const message = event instanceof ErrorEvent ? event.message : 'Unknown error while loading image buffer.';
       reject(new Error(`Failed to load image buffer: ${message}`));
     };
-    image.src = `data:${mime};base64,${data.toString('base64')}`;
+    image.src = `data:${mime};base64,${uint8ArrayToBase64(data)}`;
   });
 }
 
@@ -66,8 +69,8 @@ function drawToCanvas(image: HTMLImageElement, maxWidth: number) {
   return { canvas, width, height };
 }
 
-function dataUrlToBuffer(dataUrl: string): Buffer {
+function dataUrlToBuffer(dataUrl: string): Uint8Array {
   const parts = dataUrl.split(',');
   const base64 = parts[1] ?? '';
-  return Buffer.from(base64, 'base64');
+  return base64ToUint8Array(base64);
 }

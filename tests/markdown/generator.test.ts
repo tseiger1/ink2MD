@@ -1,4 +1,3 @@
-import { Buffer } from 'buffer';
 import { describe, expect, it, jest } from '@jest/globals';
 import { buildFrontMatter, buildMarkdown, buildPagesSection } from 'src/markdown/generator';
 import { ConvertedNote, ImageEmbed, MarkdownGenerationContext } from 'src/types';
@@ -14,8 +13,8 @@ const baseNote: ConvertedNote = {
     relativeFolder: 'imports',
   },
   pages: [
-    { pageNumber: 1, fileName: 'page-1.png', width: 1280, height: 720, data: Buffer.from('') },
-    { pageNumber: 2, fileName: 'page-2.png', width: 1280, height: 720, data: Buffer.from('') },
+    { pageNumber: 1, fileName: 'page-1.png', width: 1280, height: 720, data: new Uint8Array() },
+    { pageNumber: 2, fileName: 'page-2.png', width: 1280, height: 720, data: new Uint8Array() },
   ],
 };
 

@@ -1,14 +1,7 @@
-import { Buffer } from 'buffer';
-import { promises as fs } from 'fs';
 import { afterAll, afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { convertImageSource } from 'src/conversion/imageConversion';
 import { NoteSource } from 'src/types';
-
-jest.mock('fs', () => ({
-  promises: {
-    readFile: jest.fn(),
-  },
-}));
+import { uint8ArrayToBase64 } from 'src/utils/base64';
 
 type MockCanvas = {
   width: number;
@@ -62,7 +55,7 @@ const source: NoteSource = {
 describe('convertImageSource', () => {
   let canvas: MockCanvas;
   let context: MockContext;
-  const readFileMock = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+  const readFileMock: jest.MockedFunction<(path: string) => Promise<ArrayBuffer>> = jest.fn();
   const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
   beforeEach(() => {
@@ -73,14 +66,16 @@ describe('convertImageSource', () => {
       width: 0,
       height: 0,
       getContext: jest.fn(() => context),
-      toDataURL: jest.fn(() => `data:image/png;base64,${Buffer.from('png-data').toString('base64')}`),
+      toDataURL: jest.fn(() => `data:image/png;base64,${uint8ArrayToBase64(new TextEncoder().encode('png-data'))}`),
     } as unknown as MockCanvas;
 
     globalThis.document = {
       createElement: jest.fn(() => canvas),
     } as unknown as Document;
 
-    readFileMock.mockResolvedValue(Buffer.from('raw-image'));
+    const rawBuffer = new TextEncoder().encode('raw-image');
+    const rawArrayBuffer = rawBuffer.buffer.slice(rawBuffer.byteOffset, rawBuffer.byteOffset + rawBuffer.byteLength);
+    readFileMock.mockResolvedValue(rawArrayBuffer);
     MockImage.shouldError = false;
     consoleErrorSpy.mockClear();
   });
@@ -98,7 +93,7 @@ describe('convertImageSource', () => {
   });
 
   it('returns a converted note with a scaled PNG page', async () => {
-    const result = await convertImageSource(source, 800);
+    const result = await convertImageSource(source, 800, readFileMock);
 
     expect(result).not.toBeNull();
     expect(result?.pages).toHaveLength(1);
@@ -106,7 +101,7 @@ describe('convertImageSource', () => {
     expect(page?.fileName).toBe('page.png');
     expect(page?.width).toBe(800);
     expect(page?.height).toBe(400);
-    expect(page?.data.toString()).toBe('png-data');
+    expect(new TextDecoder().decode(page?.data ?? new Uint8Array())).toBe('png-data');
     expect(canvas.getContext).toHaveBeenCalledWith('2d');
     expect(context.drawImage).toHaveBeenCalledWith(expect.any(MockImage), 0, 0, 800, 400);
     expect(consoleErrorSpy).not.toHaveBeenCalled();
@@ -115,7 +110,7 @@ describe('convertImageSource', () => {
 	it('returns null and logs when the canvas context cannot be created', async () => {
 		canvas.getContext.mockReturnValue(null);
 
-		const result = await convertImageSource(source, 800);
+		const result = await convertImageSource(source, 800, readFileMock);
 
 		expect(result).toBeNull();
 		expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to convert image'), expect.any(Error));
@@ -124,7 +119,7 @@ describe('convertImageSource', () => {
   it('returns null when reading the file fails', async () => {
     readFileMock.mockRejectedValue(new Error('read error'));
 
-    const result = await convertImageSource(source, 800);
+    const result = await convertImageSource(source, 800, readFileMock);
 
     expect(result).toBeNull();
     expect(consoleErrorSpy).toHaveBeenCalled();

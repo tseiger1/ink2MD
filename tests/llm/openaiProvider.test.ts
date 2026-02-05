@@ -1,12 +1,15 @@
-import { Buffer } from 'buffer';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { buildVisionMessage, emitStreamContent } from 'src/llm/openaiProvider';
 import type { ChatCompletionContentPart } from 'openai/resources/chat/completions';
 import { ConvertedNote, MarkdownStreamHandler } from 'src/types';
 import { scalePngBufferToDataUrl } from 'src/utils/pngScaler';
 
+const toHex = (data: Uint8Array) => Array.from(data)
+  .map((value) => value.toString(16).padStart(2, '0'))
+  .join('');
+
 jest.mock('src/utils/pngScaler', () => ({
-  scalePngBufferToDataUrl: jest.fn(async (data: Buffer, maxWidth: number) => `scaled:${data.toString('hex')}:${maxWidth}`),
+  scalePngBufferToDataUrl: jest.fn(async (data: Uint8Array, maxWidth: number) => `scaled:${toHex(data)}:${maxWidth}`),
 }));
 
 const scaleMock = scalePngBufferToDataUrl as jest.MockedFunction<typeof scalePngBufferToDataUrl>;
@@ -23,8 +26,8 @@ describe('buildVisionMessage', () => {
       relativeFolder: '.',
     },
     pages: [
-      { pageNumber: 1, fileName: 'page-1.png', width: 800, height: 600, data: Buffer.from('page1') },
-      { pageNumber: 2, fileName: 'page-2.png', width: 800, height: 600, data: Buffer.from('page2') },
+      { pageNumber: 1, fileName: 'page-1.png', width: 800, height: 600, data: new TextEncoder().encode('page1') },
+      { pageNumber: 2, fileName: 'page-2.png', width: 800, height: 600, data: new TextEncoder().encode('page2') },
     ],
   };
 

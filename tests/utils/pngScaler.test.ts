@@ -1,6 +1,6 @@
-import { Buffer } from 'buffer';
 import { afterAll, afterEach, describe, expect, it, jest } from '@jest/globals';
 import { scalePngBufferToDataUrl } from 'src/utils/pngScaler';
+import { uint8ArrayToBase64 } from 'src/utils/base64';
 
 const ORIGINAL_DOCUMENT = globalThis.document;
 const OriginalImage = (globalThis as typeof globalThis & { Image?: typeof Image }).Image;
@@ -62,7 +62,7 @@ function createMockContext(): MockCanvasContext {
 }
 
 describe('scalePngBufferToDataUrl', () => {
-  const pngBuffer = Buffer.from('image-bytes');
+  const pngBuffer = new TextEncoder().encode('image-bytes');
 
   afterEach(() => {
     globalThis.document = ORIGINAL_DOCUMENT;
@@ -124,6 +124,6 @@ describe('scalePngBufferToDataUrl', () => {
 
     const result = await scalePngBufferToDataUrl(pngBuffer, 0);
 
-    expect(result).toBe(`data:image/png;base64,${pngBuffer.toString('base64')}`);
+    expect(result).toBe(`data:image/png;base64,${uint8ArrayToBase64(pngBuffer)}`);
   });
 });

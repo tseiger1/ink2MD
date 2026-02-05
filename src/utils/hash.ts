@@ -1,12 +1,7 @@
-import { createHash } from 'crypto';
-import { createReadStream } from 'fs';
+import type { DataAdapter } from 'obsidian';
+import { sha1Buffer } from './sha1';
 
-export function hashFile(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = createHash('sha1');
-    const stream = createReadStream(filePath);
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('error', reject);
-    stream.on('end', () => resolve(hash.digest('hex')));
-  });
+export async function hashFile(adapter: DataAdapter, filePath: string): Promise<string> {
+	const data = await adapter.readBinary(filePath);
+	return sha1Buffer(data);
 }

@@ -1,15 +1,16 @@
-import path from 'path';
+import type { DataAdapter } from 'obsidian';
 import { collectFilesRecursive, getRelativeFolder } from './fileCollector';
 import { NoteSource, SourceConfig } from '../types';
 import { createStableId, slugifyFilePath } from '../utils/naming';
+import { getExtension } from '../utils/path';
 
 const PDF_EXTENSIONS = ['.pdf'];
 
-export async function collectPdfSources(source: SourceConfig): Promise<NoteSource[]> {
+export async function collectPdfSources(adapter: DataAdapter, source: SourceConfig): Promise<NoteSource[]> {
 	const sources: NoteSource[] = [];
 
 	for (const dir of source.directories) {
-		const files = await collectFilesRecursive(dir, PDF_EXTENSIONS, { recursive: source.recursive });
+		const files = await collectFilesRecursive(adapter, dir, PDF_EXTENSIONS, { recursive: source.recursive });
 		for (const filePath of files) {
 			sources.push({
 				id: createStableId(filePath),
@@ -27,5 +28,5 @@ export async function collectPdfSources(source: SourceConfig): Promise<NoteSourc
 }
 
 export function isPdfFile(filePath: string): boolean {
-	return PDF_EXTENSIONS.includes(path.extname(filePath).toLowerCase());
+	return PDF_EXTENSIONS.includes(getExtension(filePath).toLowerCase());
 }

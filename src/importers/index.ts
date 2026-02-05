@@ -1,27 +1,38 @@
-import { promises as fs } from 'fs';
-import type { Stats } from 'fs';
+import type { DataAdapter, FileStats } from 'obsidian';
 import { NoteSource, SourceConfig } from '../types';
 import { collectImageSources } from './imageImporter';
 import { collectPdfSources } from './pdfImporter';
 
-async function isDirectory(pathStr: string): Promise<boolean> {
-  let stats: Stats;
-  try {
-    stats = await fs.stat(pathStr);
-  } catch (error) {
-    console.warn(`[ink2md] Unable to access ${pathStr}:`, error);
-    return false;
-  }
-  return stats.isDirectory();
+async function isDirectory(adapter: DataAdapter, pathStr: string): Promise<boolean> {
+	let stats: FileStats | null = null;
+	try {
+		stats = await adapter.stat(pathStr);
+	} catch (error) {
+		console.warn(`[ink2md] Unable to access ${pathStr}:`, error);
+		return false;
+	}
+	if (stats && 'type' in stats && stats.type) {
+		return stats.type === 'folder';
+	}
+	try {
+		await adapter.list(pathStr);
+		return true;
+	} catch (error) {
+		console.warn(`[ink2md] Unable to list ${pathStr}:`, error);
+		return false;
+	}
 }
 
-export async function discoverNoteSourcesForConfig(config: SourceConfig): Promise<NoteSource[]> {
+export async function discoverNoteSourcesForConfig(
+	adapter: DataAdapter,
+	config: SourceConfig,
+): Promise<NoteSource[]> {
 	if (config.type !== 'filesystem') {
 		return [];
 	}
 	const validDirs: string[] = [];
 	for (const dir of config.directories) {
-		if (await isDirectory(dir)) {
+		if (await isDirectory(adapter, dir)) {
 			validDirs.push(dir);
 		}
 	}
@@ -34,11 +45,11 @@ export async function discoverNoteSourcesForConfig(config: SourceConfig): Promis
 	const sources: NoteSource[] = [];
 
 	if (config.includeImages) {
-		sources.push(...await collectImageSources(normalizedConfig));
+		sources.push(...await collectImageSources(adapter, normalizedConfig));
 	}
 
 	if (config.includePdfs) {
-		sources.push(...await collectPdfSources(normalizedConfig));
+		sources.push(...await collectPdfSources(adapter, normalizedConfig));
 	}
 
 	return sources;

@@ -13,14 +13,12 @@ export interface NoteSource {
 	originalPath?: string;
 }
 
-import type { Buffer } from 'buffer';
-
 export interface ConvertedPage {
 	pageNumber: number;
 	fileName: string;
 	width: number;
 	height: number;
-	data: Buffer;
+	data: Uint8Array;
 }
 
 export interface ConvertedNote {

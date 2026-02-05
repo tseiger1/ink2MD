@@ -1,9 +1,4 @@
-import { Buffer } from 'buffer';
-import { spawn } from 'child_process';
-import { promises as fs } from 'fs';
-import os from 'os';
-import path from 'path';
-import { FileSystemAdapter, Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from 'obsidian';
+import { Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from 'obsidian';
 import type { SecretStorage } from 'obsidian';
 import { DEFAULT_SETTINGS, Ink2MDSettingTab } from './settings';
 import type {
@@ -22,6 +17,7 @@ import { LLMService } from './llm';
 import { buildMarkdown, buildFrontMatter, buildPagesSection } from './markdown/generator';
 import { hashFile } from './utils/hash';
 import { createStableId, slugifyFilePath } from './utils/naming';
+import { getBasename, getDirname, getExtension, joinPaths as joinPathSegments } from './utils/path';
 import { isImageFile } from './importers/imageImporter';
 import { isPdfFile } from './importers/pdfImporter';
 import { Ink2MDDropView, VIEW_TYPE_INK2MD_DROP } from './ui/dropView';
@@ -303,6 +299,10 @@ interface ImportRunOptions {
 			if (sourceConfig.type !== 'filesystem') {
 				continue;
 			}
+			if (this.isMobileApp()) {
+				new Notice(`Source "${sourceConfig.label}" is unavailable on mobile.`);
+				continue;
+			}
 			if (!sourceConfig.directories.length) {
 				new Notice(`Source "${sourceConfig.label}" has no directories configured.`);
 				continue;
@@ -316,7 +316,7 @@ interface ImportRunOptions {
 				blockedByScript = true;
 				continue;
 			}
-			const notes = await discoverNoteSourcesForConfig(sourceConfig);
+			const notes = await discoverNoteSourcesForConfig(this.app.vault.adapter, sourceConfig);
 			for (const note of notes) {
 				jobs.push({ note, sourceConfig, preset });
 			}
@@ -330,28 +330,52 @@ interface ImportRunOptions {
 		if (!command) {
 			return true;
 		}
+		if (this.isMobileApp()) {
+			new Notice('Pre-import scripts are not supported on mobile.');
+			return false;
+		}
 		this.setStatus(`Running script: ${sourceConfig.label}`);
 			return await new Promise((resolve) => {
-				const cwd = this.getVaultBasePath() ?? undefined;
-				const child = spawn(command, {
-					shell: true,
-					cwd,
-				});
+				void (async () => {
+					let spawn: ((command: string, options?: { shell?: boolean; cwd?: string }) => {
+						stdout?: { on: (event: string, handler: (data: { toString: () => string }) => void) => void };
+						stderr?: { on: (event: string, handler: (data: { toString: () => string }) => void) => void };
+						on: (event: string, handler: (...args: unknown[]) => void) => void;
+					}) | null = null;
+					try {
+						const requireFn = (globalThis as { require?: (module: string) => { spawn?: typeof spawn } }).require;
+						const childProcess = requireFn?.('child_process');
+						spawn = childProcess?.spawn ?? null;
+					} catch (error) {
+						console.error('[ink2md] Unable to load child_process for pre-import script.', error);
+						new Notice('Pre-import scripts are unavailable in this environment.');
+						resolve(false);
+						return;
+					}
+					if (!spawn) {
+						console.warn('[ink2md] child_process spawn is not available.');
+						new Notice('Pre-import scripts are unavailable in this environment.');
+						resolve(false);
+						return;
+					}
+					const child = spawn(command, {
+						shell: true,
+					});
 				let stdout = '';
 				let stderr = '';
-				child.stdout?.on('data', (data: Buffer) => {
+				child.stdout?.on('data', (data: { toString: () => string }) => {
 					stdout += data.toString();
 				});
-				child.stderr?.on('data', (data: Buffer) => {
+				child.stderr?.on('data', (data: { toString: () => string }) => {
 					stderr += data.toString();
 				});
-			child.on('error', (error) => {
-				console.error(`[ink2md] Failed to start pre-import script for ${sourceConfig.label}`, error);
+				child.on('error', (error: Error) => {
+					console.error(`[ink2md] Failed to start pre-import script for ${sourceConfig.label}`, error);
 					new Notice(`Pre-import script for "${sourceConfig.label}" failed to start (${error.message}).`);
-				resolve(false);
-			});
-				child.on('close', (code, signal) => {
-				if (code === 0) {
+					resolve(false);
+				});
+				child.on('close', (code: number | null, signal: string | null) => {
+					if (code === 0) {
 						let successMessage = stdout.trim();
 						if (!successMessage) {
 							successMessage = 'Script finished successfully';
@@ -359,7 +383,7 @@ interface ImportRunOptions {
 						if (successMessage.length > 280) {
 							successMessage = `${successMessage.slice(0, 277)}...`;
 						}
-							new Notice(`Script for "${sourceConfig.label}" succeeded (${successMessage}).`);
+						new Notice(`Script for "${sourceConfig.label}" succeeded (${successMessage}).`);
 						resolve(true);
 						return;
 					}
@@ -374,10 +398,11 @@ interface ImportRunOptions {
 					if (message.length > 280) {
 						message = `${message.slice(0, 277)}...`;
 					}
-							new Notice(`Pre-import script for "${sourceConfig.label}" failed (${message}).`);
+					new Notice(`Pre-import script for "${sourceConfig.label}" failed (${message}).`);
 					console.error(`[ink2md] Pre-import script for ${sourceConfig.label} failed: ${message}`);
 					resolve(false);
 				});
+			})();
 		});
 	}
 
@@ -449,6 +474,7 @@ interface ImportRunOptions {
 			const converted = await convertSourceToPng(source, {
 				attachmentMaxWidth: sourceConfig.attachmentMaxWidth,
 				pdfDpi: sourceConfig.pdfDpi,
+				readFile: (filePath) => this.readBinaryFile(filePath),
 			});
 			if (!converted) {
 				continue;
@@ -534,7 +560,7 @@ interface ImportRunOptions {
 		if (isImageFile(filePath)) {
 			return 'image';
 		}
-		const ext = path.extname(filePath).toLowerCase();
+		const ext = getExtension(filePath).toLowerCase();
 		if (ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.webp') {
 			return 'image';
 		}
@@ -566,7 +592,7 @@ interface ImportRunOptions {
 			format,
 			filePath,
 			basename,
-			inputRoot: path.dirname(filePath),
+			inputRoot: getDirname(filePath),
 			relativeFolder: '',
 			originalPath: displayName ?? undefined,
 		};
@@ -804,21 +830,25 @@ interface ImportRunOptions {
 		const store = this.ensureProcessedStore();
 		let stats;
 		try {
-			stats = await fs.stat(source.filePath);
+			stats = await this.app.vault.adapter.stat(source.filePath);
 		} catch (error) {
 			console.warn(`[ink2md] Unable to stat ${source.filePath}`, error);
+			return { shouldProcess: true };
+		}
+		if (!stats) {
 			return { shouldProcess: true };
 		}
 
 		const cached = store[source.id];
 		const previousFolder = cached?.outputFolder;
-		if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+		const mtime = this.getStatMtime(stats);
+		if (cached && cached.mtimeMs === mtime && cached.size === stats.size) {
 			return { shouldProcess: false, previousFolder };
 		}
 
 		let hash: string;
 		try {
-			hash = await hashFile(source.filePath);
+			hash = await hashFile(this.app.vault.adapter, source.filePath);
 		} catch (error) {
 			console.warn(`[ink2md] Unable to hash ${source.filePath}`, error);
 			return { shouldProcess: true, previousFolder };
@@ -829,7 +859,7 @@ interface ImportRunOptions {
 				...cached,
 				hash,
 				size: stats.size,
-				mtimeMs: stats.mtimeMs,
+				mtimeMs: mtime,
 			};
 			await this.saveSettings();
 			return { shouldProcess: false, previousFolder };
@@ -840,7 +870,7 @@ interface ImportRunOptions {
 			fingerprint: {
 				hash,
 				size: stats.size,
-				mtimeMs: stats.mtimeMs,
+				mtimeMs: mtime,
 			},
 			previousFolder,
 		};
@@ -874,22 +904,35 @@ interface ImportRunOptions {
 	private async computeFingerprint(source: NoteSource): Promise<SourceFingerprint | null> {
 		let stats;
 		try {
-			stats = await fs.stat(source.filePath);
+			stats = await this.app.vault.adapter.stat(source.filePath);
 		} catch (error) {
 			console.warn(`[ink2md] Unable to stat ${source.filePath} for fingerprint`, error);
 			return null;
 		}
+		if (!stats) {
+			return null;
+		}
 		try {
-			const hash = await hashFile(source.filePath);
+			const hash = await hashFile(this.app.vault.adapter, source.filePath);
 			return {
 				hash,
 				size: stats.size,
-				mtimeMs: stats.mtimeMs,
+				mtimeMs: this.getStatMtime(stats),
 			};
 		} catch (error) {
 			console.warn(`[ink2md] Unable to hash ${source.filePath}`, error);
 			return null;
 		}
+	}
+
+	private getStatMtime(stats: { mtime?: number; mtimeMs?: number }): number {
+		if (typeof stats.mtime === 'number') {
+			return stats.mtime;
+		}
+		if (typeof stats.mtimeMs === 'number') {
+			return stats.mtimeMs;
+		}
+		return 0;
 	}
 
 	private async resetFolder(folderPath: string) {
@@ -987,6 +1030,20 @@ interface ImportRunOptions {
 		return normalizePath(filtered.join('/'));
 	}
 
+	private getPluginDataPath(): string {
+		const configDir = this.app.vault.configDir ?? '';
+		const basePath = configDir ? normalizePath(configDir) : '';
+		return normalizePath(`${basePath}/plugins/${this.manifest.id}`);
+	}
+
+	private isMobileApp(): boolean {
+		return (this.app as { isMobile?: boolean }).isMobile === true;
+	}
+
+	private async readBinaryFile(filePath: string): Promise<ArrayBuffer> {
+		return this.app.vault.adapter.readBinary(filePath);
+	}
+
 	private async ensureDirectory(path: string) {
 		const trimmed = path?.trim();
 		if (!trimmed) {
@@ -1042,8 +1099,8 @@ interface ImportRunOptions {
 		const dir = await this.ensureDropzoneCacheDir();
 		const safeName = this.sanitizeTempFileName(fileName);
 		const uniqueName = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
-		const stagedPath = path.join(dir, uniqueName);
-		await fs.writeFile(stagedPath, Buffer.from(data));
+		const stagedPath = joinPathSegments(dir, uniqueName);
+		await this.app.vault.adapter.writeBinary(stagedPath, data);
 		this.stagedFiles.add(stagedPath);
 		const displayName = fileName?.trim()?.length ? fileName.trim() : safeName;
 		return { path: stagedPath, displayName };
@@ -1052,7 +1109,7 @@ interface ImportRunOptions {
 	async cleanupStagedFiles(paths: string[]) {
 		for (const filePath of paths) {
 			try {
-				await fs.unlink(filePath);
+				await this.app.vault.adapter.remove(filePath);
 			} catch (error) {
 				console.warn(`[ink2md] Unable to delete staged file ${filePath}`, error);
 			}
@@ -1064,8 +1121,8 @@ interface ImportRunOptions {
 		if (this.dropzoneCacheDir) {
 			return this.dropzoneCacheDir;
 		}
-		const dir = path.join(os.tmpdir(), 'ink2md-dropzone');
-		await fs.mkdir(dir, { recursive: true });
+		const dir = joinPathSegments(this.getPluginDataPath(), 'dropzone-cache');
+		await this.ensureDirectory(dir);
 		this.dropzoneCacheDir = dir;
 		return dir;
 	}
@@ -1096,7 +1153,7 @@ interface ImportRunOptions {
 		if (provided?.trim()) {
 			return provided.trim();
 		}
-		const basename = path.basename(filePath);
+		const basename = getBasename(filePath);
 		if (this.dropzoneCacheDir && filePath.startsWith(this.dropzoneCacheDir)) {
 			const parts = basename.split('-');
 			if (parts.length >= 3) {
@@ -2059,16 +2116,8 @@ interface ImportRunOptions {
 		return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 	}
 
-	private getVaultBasePath(): string | null {
-		const adapter = this.app.vault.adapter;
-		if (adapter instanceof FileSystemAdapter) {
-			return adapter.getBasePath();
-		}
-		const legacyPath = (adapter as { basePath?: string }).basePath;
-		return typeof legacyPath === 'string' ? legacyPath : null;
-	}
 }
 
-function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
-  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+function bufferToArrayBuffer(buffer: Uint8Array): ArrayBuffer {
+	return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }

@@ -1,13 +1,6 @@
-import { Buffer } from 'buffer';
-import { promises as fs } from 'fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { NoteSource } from 'src/types';
-
-jest.mock('fs', () => ({
-  promises: {
-    readFile: jest.fn(),
-  },
-}));
+import { uint8ArrayToBase64 } from 'src/utils/base64';
 
 jest.mock('pdfjs-dist/legacy/build/pdf.mjs', () => {
   const getDocument = jest.fn();
@@ -103,7 +96,7 @@ const createPage = (pageNumber: number): MockPdfPage => {
 };
 
 describe('convertPdfSource', () => {
-  const readFileMock = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+  const readFileMock: jest.MockedFunction<(path: string) => Promise<ArrayBuffer>> = jest.fn();
   let getDocumentMock: jest.MockedFunction<typeof pdfjsLib.getDocument> | null = null;
   const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -118,7 +111,9 @@ describe('convertPdfSource', () => {
     };
     const loadingTask: MockPdfLoadingTask = { promise: Promise.resolve(pdf) };
     getDocumentMock.mockReturnValue(loadingTask as unknown as PdfLoadingTask);
-    readFileMock.mockResolvedValue(Buffer.from('pdf-bytes'));
+    const rawBuffer = new TextEncoder().encode('pdf-bytes');
+    const rawArrayBuffer = rawBuffer.buffer.slice(rawBuffer.byteOffset, rawBuffer.byteOffset + rawBuffer.byteLength);
+    readFileMock.mockResolvedValue(rawArrayBuffer);
 
     const canvases: MockCanvas[] = [
       createCanvas('page-1'),
@@ -145,7 +140,7 @@ afterAll(() => {
 });
 
   it('converts each PDF page into a PNG buffer respecting max width and dpi', async () => {
-    const result = await convertPdfSource(source, 600, 144);
+    const result = await convertPdfSource(source, 600, 144, readFileMock);
     expect(result?.pages).toHaveLength(2);
     expect(result?.pages[0]).toMatchObject({
       pageNumber: 1,
@@ -159,8 +154,8 @@ afterAll(() => {
       width: 600,
       height: 400,
     });
-    expect(result?.pages[0]?.data.toString()).toBe('page-1');
-    expect(result?.pages[1]?.data.toString()).toBe('page-2');
+    expect(new TextDecoder().decode(result?.pages[0]?.data ?? new Uint8Array())).toBe('page-1');
+    expect(new TextDecoder().decode(result?.pages[1]?.data ?? new Uint8Array())).toBe('page-2');
     expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 
@@ -173,14 +168,16 @@ afterAll(() => {
       })),
     } as unknown as Document;
 
-    const result = await convertPdfSource(source, 600, 144);
+    const result = await convertPdfSource(source, 600, 144, readFileMock);
     expect(result).toBeNull();
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to convert PDF'), expect.any(Error));
   });
 
   it('returns null when pdf.js fails to load the document', async () => {
+    const failingPromise = Promise.reject(new Error('load error'));
+    failingPromise.catch(() => {});
     const failingTask: MockPdfLoadingTask = {
-      promise: Promise.reject(new Error('load error')),
+      promise: failingPromise,
     };
     const mock = getDocumentMock;
     if (!mock) {
@@ -188,7 +185,7 @@ afterAll(() => {
     }
     mock.mockReturnValueOnce(failingTask as unknown as PdfLoadingTask);
 
-    const result = await convertPdfSource(source, 600, 144);
+    const result = await convertPdfSource(source, 600, 144, readFileMock);
     expect(result).toBeNull();
     expect(consoleErrorSpy).toHaveBeenCalled();
   });
@@ -202,6 +199,6 @@ function createCanvas(label: string): MockCanvas {
 		width: 0,
 		height: 0,
 		getContext: jest.fn(() => context),
-		toDataURL: jest.fn(() => `data:image/png;base64,${Buffer.from(label).toString('base64')}`),
+		toDataURL: jest.fn(() => `data:image/png;base64,${uint8ArrayToBase64(new TextEncoder().encode(label))}`),
 	};
 }

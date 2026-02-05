@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
 import { describe, expect, it } from '@jest/globals';
 import { createStableId, slugifyFilePath } from 'src/utils/naming';
+import { sha1String } from 'src/utils/sha1';
 
 describe('slugifyFilePath', () => {
   it('converts mixed characters into a lowercase slug', () => {
@@ -26,7 +26,7 @@ describe('createStableId', () => {
   });
 
   it('uses the optional scope when hashing to avoid collisions', () => {
-    const expectedHash = createHash('sha1').update(`source-a:${samplePath}`).digest('hex').slice(0, 8);
+    const expectedHash = sha1String(`source-a:${samplePath}`).slice(0, 8);
     const stableId = createStableId(samplePath, 'source-a');
     expect(stableId).toBe(`note-one-${expectedHash}`);
   });

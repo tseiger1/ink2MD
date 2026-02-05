@@ -1,49 +1,53 @@
-import { promises as fs } from 'fs';
-import type { Dirent } from 'fs';
-import path from 'path';
+import type { DataAdapter } from 'obsidian';
+import { getDirname, getExtension, getRelativePath, joinPaths } from '../utils/path';
 
 export async function collectFilesRecursive(
+	adapter: DataAdapter,
 	rootDir: string,
 	extensions: string[],
 	options?: { recursive?: boolean },
 ): Promise<string[]> {
-  const matches: string[] = [];
-  const normalizedExt = new Set(extensions.map((ext) => ext.toLowerCase()));
-  const recursive = options?.recursive !== false;
+	const matches: string[] = [];
+	const normalizedExt = new Set(extensions.map((ext) => ext.toLowerCase()));
+	const recursive = options?.recursive !== false;
 
-  async function walk(currentPath: string) {
-    let entries: Dirent[] = [];
-    try {
-      entries = await fs.readdir(currentPath, { withFileTypes: true });
-    } catch (error) {
-      console.warn(`[ink2md] Unable to read directory ${currentPath}:`, error);
-      return;
-    }
+	async function walk(currentPath: string) {
+		let listing: { files: string[]; folders: string[] } | null = null;
+		try {
+			listing = await adapter.list(currentPath);
+		} catch (error) {
+			console.warn(`[ink2md] Unable to read directory ${currentPath}:`, error);
+			return;
+		}
 
-    for (const entry of entries) {
-      const fullPath = path.join(currentPath, entry.name);
-      if (entry.isDirectory()) {
-        if (recursive) {
-          await walk(fullPath);
-        }
-        continue;
-      }
-      const ext = path.extname(entry.name).toLowerCase();
-      if (normalizedExt.has(ext)) {
-        matches.push(fullPath);
-      }
-    }
-  }
+		for (const filePath of listing.files) {
+			const ext = getExtension(filePath).toLowerCase();
+			if (normalizedExt.has(ext)) {
+				matches.push(filePath);
+			}
+		}
+		if (!recursive) {
+			return;
+		}
+		for (const folderPath of listing.folders) {
+			await walk(folderPath);
+		}
+	}
 
-  await walk(rootDir);
-  return matches;
+	const startPath = joinPaths(rootDir);
+	await walk(startPath);
+	return matches;
 }
 
 export function getRelativeFolder(rootDir: string, filePath: string): string {
-  const parentDir = path.dirname(filePath);
-  const relative = path.relative(rootDir, parentDir);
-  if (!relative || relative === '.' || relative.startsWith('..')) {
-    return '';
-  }
-  return relative.split(path.sep).filter(Boolean).join('/');
+	const parentDir = getDirname(filePath);
+	const relative = getRelativePath(rootDir, parentDir);
+	if (!relative) {
+		return '';
+	}
+	return relative
+		.split('/')
+		.map((part) => part.trim())
+		.filter(Boolean)
+		.join('/');
 }

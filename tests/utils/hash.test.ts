@@ -1,34 +1,36 @@
-import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { createHash } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import type { DataAdapter } from 'obsidian';
+import { describe, expect, it } from '@jest/globals';
 import { hashFile } from 'src/utils/hash';
+import { sha1String } from 'src/utils/sha1';
 
 describe('hashFile', () => {
-  let tempDir: string;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(tmpdir(), 'hash-test-'));
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
-
   it('returns the SHA-1 hash of a file', async () => {
-    const filePath = path.join(tempDir, 'note.txt');
-    await fs.writeFile(filePath, 'hello world');
+    const dataMap = new Map<string, ArrayBuffer>();
+    const buffer = new TextEncoder().encode('hello world');
+    dataMap.set('/vault/note.txt', buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+    const adapter: DataAdapter = {
+      readBinary: async (path) => {
+        const data = dataMap.get(path);
+        if (!data) {
+          throw new Error('missing file');
+        }
+        return data;
+      },
+    } as DataAdapter;
 
-    const result = await hashFile(filePath);
-    const expected = createHash('sha1').update('hello world').digest('hex');
+    const result = await hashFile(adapter, '/vault/note.txt');
+    const expected = sha1String('hello world');
 
     expect(result).toBe(expected);
   });
 
   it('rejects when the file cannot be read', async () => {
-    const missingPath = path.join(tempDir, 'missing.txt');
+    const adapter = {
+      readBinary: async () => {
+        throw new Error('missing file');
+      },
+    } as unknown as DataAdapter;
 
-    await expect(hashFile(missingPath)).rejects.toThrow();
+    await expect(hashFile(adapter, '/vault/missing.txt')).rejects.toThrow();
   });
 });

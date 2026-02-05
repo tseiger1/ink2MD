@@ -288,10 +288,13 @@ export class Ink2MDSettingTab extends PluginSettingTab {
   private renderSourceDetails(container: HTMLElement, draft: SourceConfig, titleEl: HTMLElement, summaryEl: HTMLElement) {
     let labelInput: TextComponent | null = null;
     let isAutoLabel = this.isAutoLabel(draft);
+    const isMobile = (this.app as { isMobile?: boolean }).isMobile === true;
 
     new Setting(container)
       .setName('Source type')
-      .setDesc('Watch folders automatically or use the right sidebar dropzone view.')
+      .setDesc(isMobile
+        ? 'Folder sources are desktop-only on mobile. Use the dropzone view instead.'
+        : 'Watch folders automatically or use the right sidebar dropzone view.')
       .addDropdown((dropdown) =>
         dropdown
           .addOption('filesystem', 'Folder source')
@@ -347,13 +350,18 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     if (draft.type === 'filesystem') {
       const directoriesSetting = new Setting(container)
         .setName('Directories')
-        .setDesc('Absolute paths, one per line. Sub-folders are included when recursive is enabled.');
+        .setDesc(isMobile
+          ? 'Folder sources are desktop-only on mobile.'
+          : 'Absolute paths, one per line. Sub-folders are included when recursive is enabled.');
       directoriesSetting.controlEl.empty();
       const directoriesInput = directoriesSetting.controlEl.createEl('textarea', {
         cls: 'ink2md-source-directories',
         text: draft.directories.join('\n'),
       });
       directoriesInput.rows = 4;
+      if (isMobile) {
+        directoriesInput.disabled = true;
+      }
       directoriesInput.addEventListener('change', () => {
         draft.directories = directoriesInput.value
           .split('\n')
@@ -380,15 +388,20 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
     new Setting(container)
       .setName('Pre-import script (optional)')
-      .setDesc('Command to run before importing from this source. Import only continues if it exits with code 0.')
-      .addText((text) =>
+      .setDesc(isMobile
+        ? 'Pre-import scripts are not supported on mobile.'
+        : 'Command to run before importing from this source. Import only continues if it exits with code 0.')
+      .addText((text) => {
         text
           .setPlaceholder('/path/to/script.sh')
           .setValue(draft.preImportScript ?? '')
           .onChange((value) => {
             draft.preImportScript = value.trim();
-          }),
-      );
+          });
+        if (isMobile) {
+          text.setDisabled(true);
+        }
+      });
 
     new Setting(container)
       .setName('Image imports (.png/.jpg/.webp)')

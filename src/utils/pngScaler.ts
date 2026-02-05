@@ -1,6 +1,6 @@
-import { Buffer } from 'buffer';
+import { uint8ArrayToBase64 } from './base64';
 
-export async function scalePngBufferToDataUrl(pngBuffer: Buffer, maxWidth: number): Promise<string> {
+export async function scalePngBufferToDataUrl(pngBuffer: Uint8Array, maxWidth: number): Promise<string> {
   if (!maxWidth || maxWidth <= 0) {
     return bufferToDataUrl(pngBuffer);
   }
@@ -20,11 +20,11 @@ export async function scalePngBufferToDataUrl(pngBuffer: Buffer, maxWidth: numbe
   return canvas.toDataURL('image/png');
 }
 
-function bufferToDataUrl(buffer: Buffer): string {
-  return `data:image/png;base64,${buffer.toString('base64')}`;
+function bufferToDataUrl(buffer: Uint8Array): string {
+  return `data:image/png;base64,${uint8ArrayToBase64(buffer)}`;
 }
 
-function loadImageFromBuffer(buffer: Buffer): Promise<HTMLImageElement> {
+function loadImageFromBuffer(buffer: Uint8Array): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);

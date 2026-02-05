@@ -1,9 +1,8 @@
-import { Buffer } from 'buffer';
-import { promises as fs } from 'fs';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { ConvertedNote, ConvertedPage, NoteSource } from '../types';
 import { PDF_WORKER_SOURCE } from '../pdfWorkerSource';
+import { base64ToUint8Array } from '../utils/base64';
 
 const WORKER_URL = createWorkerUrl();
 pdfjsLib.GlobalWorkerOptions.workerSrc = WORKER_URL;
@@ -12,10 +11,11 @@ export async function convertPdfSource(
   source: NoteSource,
   maxWidth: number,
   pdfDpi: number,
+  readFile: (filePath: string) => Promise<ArrayBuffer>,
 ): Promise<ConvertedNote | null> {
   let pdf: PDFDocumentProxy | undefined;
   try {
-    const data = new Uint8Array(await fs.readFile(source.filePath));
+    const data = new Uint8Array(await readFile(source.filePath));
     const task = pdfjsLib.getDocument({ data, useSystemFonts: true });
     pdf = await task.promise;
 
@@ -67,7 +67,7 @@ function createWorkerUrl(): string {
   return url;
 }
 
-function dataUrlToBuffer(dataUrl: string): Buffer {
+function dataUrlToBuffer(dataUrl: string): Uint8Array {
   const base64 = dataUrl.split(',')[1] ?? '';
-  return Buffer.from(base64, 'base64');
+  return base64ToUint8Array(base64);
 }
