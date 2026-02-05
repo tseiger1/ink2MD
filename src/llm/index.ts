@@ -3,7 +3,6 @@ import { OpenAIVisionProvider } from './openaiProvider';
 import { AzureOpenAIVisionProvider } from './azureOpenAIProvider';
 import { LocalVisionProvider } from './localProvider';
 import { GeminiVisionProvider } from './geminiProvider';
-import { DeepSeekVisionProvider } from './deepseekProvider';
 import { AnthropicVisionProvider } from './anthropicProvider';
 
 interface VisionProvider {
@@ -26,8 +25,6 @@ export class LLMService {
 			this.provider = new OpenAIVisionProvider(preset.openAI);
 		} else if (preset.provider === 'azure-openai') {
 			this.provider = new AzureOpenAIVisionProvider(preset.azureOpenAI);
-		} else if (preset.provider === 'deepseek') {
-			this.provider = new DeepSeekVisionProvider(preset.deepseek);
 		} else if (preset.provider === 'anthropic') {
 			this.provider = new AnthropicVisionProvider(preset.anthropic);
 		} else if (preset.provider === 'gemini') {

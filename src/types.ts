@@ -70,15 +70,7 @@ export interface AnthropicProviderSettings {
 	promptTemplate: string;
 }
 
-export interface DeepSeekProviderSettings {
-	apiKey: string;
-	baseUrl: string;
-	model: string;
-	promptTemplate: string;
-	imageDetail: 'low' | 'high';
-}
-
-export type LLMProvider = 'openai' | 'azure-openai' | 'local' | 'gemini' | 'deepseek' | 'anthropic';
+export type LLMProvider = 'openai' | 'azure-openai' | 'local' | 'gemini' | 'anthropic';
 export type LLMGenerationMode = 'batch' | 'stream';
 
 export interface LLMPreset {
@@ -91,7 +83,6 @@ export interface LLMPreset {
 	azureOpenAI: AzureOpenAIProviderSettings;
 	local: LocalProviderSettings;
 	gemini: GeminiProviderSettings;
-	deepseek: DeepSeekProviderSettings;
 	anthropic: AnthropicProviderSettings;
 }
 

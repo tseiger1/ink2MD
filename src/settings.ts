@@ -33,7 +33,6 @@ const PROVIDER_LABELS: Record<LLMProvider, string> = {
 	openai: 'OpenAI',
 	'azure-openai': 'Azure OpenAI',
 	gemini: 'Google Gemini',
-	deepseek: 'DeepSeek',
 	anthropic: 'Anthropic',
 	local: 'Local',
 };
@@ -41,9 +40,6 @@ const PROVIDER_LABELS: Record<LLMProvider, string> = {
 const OPENAI_KEY_PLACEHOLDER = 'sk-...';
 const AZURE_KEY_PLACEHOLDER = 'az-...';
 const GEMINI_KEY_PLACEHOLDER = 'AIza...';
-const DEEPSEEK_KEY_PLACEHOLDER = 'sk-...';
-const DEEPSEEK_BASE_URL_PLACEHOLDER = 'https://api.deepseek.com/v1';
-const DEEPSEEK_MODEL_PLACEHOLDER = 'deepseek-vl';
 const ANTHROPIC_KEY_PLACEHOLDER = 'sk-ant-...';
 const ANTHROPIC_BASE_URL_PLACEHOLDER = 'https://api.anthropic.com';
 const ANTHROPIC_MODEL_PLACEHOLDER = 'claude-3-5-sonnet-20240620';
@@ -76,13 +72,6 @@ const DEFAULT_LLM_PRESET: LLMPreset = {
     endpoint: 'http://localhost:11434/v1/chat/completions',
     apiKey: '',
     model: 'llama-vision',
-    promptTemplate: DEFAULT_PROMPT,
-    imageDetail: 'low',
-  },
-  deepseek: {
-    apiKey: '',
-    baseUrl: 'https://api.deepseek.com/v1',
-    model: 'deepseek-vl',
     promptTemplate: DEFAULT_PROMPT,
     imageDetail: 'low',
   },
@@ -572,8 +561,6 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       this.renderOpenAIFields(providerFields, draft, this.getPresetSecretState(draft.id, 'openai'));
     } else if (draft.provider === 'azure-openai') {
       this.renderAzureOpenAIFields(providerFields, draft, this.getPresetSecretState(draft.id, 'azure-openai'));
-    } else if (draft.provider === 'deepseek') {
-      this.renderDeepSeekFields(providerFields, draft, this.getPresetSecretState(draft.id, 'deepseek'));
     } else if (draft.provider === 'anthropic') {
       this.renderAnthropicFields(providerFields, draft, this.getPresetSecretState(draft.id, 'anthropic'));
     } else if (draft.provider === 'gemini') {
@@ -655,94 +642,6 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       draft.openAI.promptTemplate = value;
     });
   }
-
-  private renderDeepSeekFields(container: HTMLElement, draft: LLMPreset, secretState: PresetSecretState) {
-    const apiKeySetting = new Setting(container).setName('API key');
-    apiKeySetting.setDesc('');
-    const descEl = apiKeySetting.descEl;
-    descEl.empty();
-    descEl.createSpan({ text: 'DeepSeek API key used for this preset.' });
-    for (const line of this.describeSecretStorageLines(draft.id, 'deepseek')) {
-      descEl.createEl('br');
-      descEl.createSpan({ text: line });
-    }
-    apiKeySetting.addText((text) => {
-        const placeholder = '••••••••';
-        const canShowPlaceholder = secretState.hasSecret && !secretState.cleared && !secretState.dirty && !draft.deepseek.apiKey;
-        let showingPlaceholder = false;
-		text.setPlaceholder(DEEPSEEK_KEY_PLACEHOLDER);
-        if (canShowPlaceholder) {
-          text.setValue(placeholder);
-          showingPlaceholder = true;
-        } else {
-          text.setValue(draft.deepseek.apiKey);
-        }
-        text.onChange((value) => {
-          if (showingPlaceholder) {
-            return;
-          }
-          const trimmed = value.trim();
-          draft.deepseek.apiKey = trimmed;
-          secretState.dirty = true;
-          secretState.cleared = trimmed.length === 0;
-        });
-        text.inputEl.type = 'password';
-        text.inputEl.autocomplete = 'off';
-        text.inputEl.addEventListener('focus', () => {
-          if (showingPlaceholder) {
-            showingPlaceholder = false;
-            text.setValue('');
-          }
-        });
-        text.inputEl.addEventListener('blur', () => {
-          if (!secretState.dirty && secretState.hasSecret && !secretState.cleared && !text.inputEl.value) {
-            showingPlaceholder = true;
-            text.setValue(placeholder);
-          }
-        });
-      });
-
-    new Setting(container)
-      .setName('Base URL')
-      .setDesc('DeepSeek API base URL, e.g. https://api.deepseek.com/v1.')
-      .addText((text) =>
-		text
-			.setPlaceholder(DEEPSEEK_BASE_URL_PLACEHOLDER)
-          .setValue(draft.deepseek.baseUrl)
-          .onChange((value) => {
-            draft.deepseek.baseUrl = value.trim();
-          }),
-      );
-
-    new Setting(container)
-      .setName('Model')
-      .setDesc('Vision model name.')
-      .addText((text) =>
-		text
-			.setPlaceholder(DEEPSEEK_MODEL_PLACEHOLDER)
-          .setValue(draft.deepseek.model)
-          .onChange((value) => {
-            draft.deepseek.model = value.trim();
-          }),
-      );
-
-    new Setting(container)
-      .setName('Image detail')
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption('low', 'Low')
-          .addOption('high', 'High')
-          .setValue(draft.deepseek.imageDetail)
-          .onChange((value) => {
-            draft.deepseek.imageDetail = value === 'high' ? 'high' : 'low';
-          }),
-      );
-
-    this.renderPromptTextarea(container, draft.deepseek.promptTemplate, (value) => {
-      draft.deepseek.promptTemplate = value;
-    });
-  }
-
   private renderAnthropicFields(container: HTMLElement, draft: LLMPreset, secretState: PresetSecretState) {
     const apiKeySetting = new Setting(container).setName('API key');
     apiKeySetting.setDesc('');
@@ -1175,7 +1074,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
   private getPresetSecretState(
     id: string,
-    provider: 'openai' | 'azure-openai' | 'gemini' | 'deepseek' | 'anthropic',
+    provider: 'openai' | 'azure-openai' | 'gemini' | 'anthropic',
   ): PresetSecretState {
     const key = this.getSecretStateKey(id, provider);
     if (!this.presetSecretStates.has(key)) {
@@ -1185,8 +1084,6 @@ export class Ink2MDSettingTab extends PluginSettingTab {
           ? this.plugin.hasAzureOpenAISecret(id)
           : provider === 'gemini'
             ? this.plugin.hasGeminiSecret(id)
-            : provider === 'deepseek'
-              ? this.plugin.hasDeepSeekSecret(id)
               : this.plugin.hasAnthropicSecret(id);
       this.presetSecretStates.set(key, {
         hasSecret,
@@ -1197,12 +1094,12 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     return this.presetSecretStates.get(key)!;
   }
 
-  private getSecretStateKey(id: string, provider: 'openai' | 'azure-openai' | 'gemini' | 'deepseek' | 'anthropic'): string {
+  private getSecretStateKey(id: string, provider: 'openai' | 'azure-openai' | 'gemini' | 'anthropic'): string {
     return `${id}:${provider}`;
   }
 
   private clearPresetSecretStates(id: string) {
-    for (const provider of ['openai', 'azure-openai', 'gemini', 'deepseek', 'anthropic'] as const) {
+    for (const provider of ['openai', 'azure-openai', 'gemini', 'anthropic'] as const) {
       this.presetSecretStates.delete(this.getSecretStateKey(id, provider));
     }
   }
@@ -1285,7 +1182,6 @@ export class Ink2MDSettingTab extends PluginSettingTab {
     await this.plugin.deleteOpenAISecret(presetId);
     await this.plugin.deleteAzureOpenAISecret(presetId);
     await this.plugin.deleteGeminiSecret(presetId);
-    await this.plugin.deleteDeepSeekSecret(presetId);
     await this.plugin.deleteAnthropicSecret(presetId);
     await this.plugin.saveSettings();
     this.display();
@@ -1322,7 +1218,6 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       const openAISecretState = this.getPresetSecretState(presetId, 'openai');
       const azureSecretState = this.getPresetSecretState(presetId, 'azure-openai');
       const geminiSecretState = this.getPresetSecretState(presetId, 'gemini');
-      const deepSeekSecretState = this.getPresetSecretState(presetId, 'deepseek');
       const anthropicSecretState = this.getPresetSecretState(presetId, 'anthropic');
       const clone = this.clonePreset(draft);
       const supportsSecretStorage = this.plugin.supportsSecretStorage();
@@ -1390,28 +1285,6 @@ export class Ink2MDSettingTab extends PluginSettingTab {
         geminiSecretState.hasSecret = false;
         geminiSecretState.dirty = false;
         geminiSecretState.cleared = false;
-      }
-
-      if (clone.provider === 'deepseek') {
-        const input = draft.deepseek.apiKey?.trim() ?? '';
-        const shouldUpdateSecret = deepSeekSecretState.dirty && !deepSeekSecretState.cleared && input.length > 0;
-        const shouldClearSecret = deepSeekSecretState.dirty && deepSeekSecretState.cleared;
-        if (shouldUpdateSecret) {
-          await this.plugin.setDeepSeekSecret(clone.id, input);
-          deepSeekSecretState.hasSecret = true;
-        } else if (shouldClearSecret) {
-          await this.plugin.setDeepSeekSecret(clone.id, '');
-          deepSeekSecretState.hasSecret = false;
-        }
-        clone.deepseek.apiKey = supportsSecretStorage ? '' : input;
-        deepSeekSecretState.dirty = false;
-        deepSeekSecretState.cleared = false;
-      } else {
-        await this.plugin.deleteDeepSeekSecret(clone.id);
-        clone.deepseek.apiKey = '';
-        deepSeekSecretState.hasSecret = false;
-        deepSeekSecretState.dirty = false;
-        deepSeekSecretState.cleared = false;
       }
 
       if (clone.provider === 'anthropic') {
@@ -1564,7 +1437,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 
   private describeSecretStorageLines(
     presetId: string,
-    provider: 'openai' | 'azure-openai' | 'gemini' | 'deepseek' | 'anthropic',
+    provider: 'openai' | 'azure-openai' | 'gemini' | 'anthropic',
   ): string[] {
     if (!this.plugin.supportsSecretStorage()) {
       return ["Stored with plugin settings because Obsidian's keychain isn't available in this Obsidian build."];
