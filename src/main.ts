@@ -21,6 +21,7 @@ import { getBasename, getDirname, getExtension, joinPaths as joinPathSegments } 
 import { isImageFile } from './importers/imageImporter';
 import { isPdfFile } from './importers/pdfImporter';
 import { Ink2MDDropView, VIEW_TYPE_INK2MD_DROP } from './ui/dropView';
+import { MobilePickerModal } from './ui/mobilePickerModal';
 
 type SecretProvider = 'openai' | 'azure-openai' | 'gemini' | 'anthropic';
 
@@ -157,6 +158,12 @@ interface ImportRunOptions {
       id: 'open-dropzone-view',
       name: 'Open dropzone view',
       callback: () => this.activateDropzoneView(true),
+    });
+
+    this.addCommand({
+      id: 'import-handwritten-notes-picker',
+      name: 'Import handwritten notes (file picker)',
+      callback: () => this.openMobilePicker(),
     });
 
     this.setupStatusBar();
@@ -783,6 +790,14 @@ interface ImportRunOptions {
 			if (focus) {
 				await this.app.workspace.revealLeaf(rightLeaf);
 			}
+	}
+
+	private openMobilePicker(): void {
+		if (!this.getDropzoneSources().length) {
+			new Notice('Configure a dropzone source in settings before importing.');
+			return;
+		}
+		new MobilePickerModal(this).open();
 	}
 
 	private setSpinner(active: boolean) {
