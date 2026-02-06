@@ -21,7 +21,7 @@ import { getBasename, getDirname, getExtension, joinPaths as joinPathSegments } 
 import { isImageFile } from './importers/imageImporter';
 import { isPdfFile } from './importers/pdfImporter';
 import { Ink2MDDropView, VIEW_TYPE_INK2MD_DROP } from './ui/dropView';
-import { MobilePickerModal } from './ui/mobilePickerModal';
+import { PickerModal } from './ui/pickerModal';
 
 type SecretProvider = 'openai' | 'azure-openai' | 'gemini' | 'anthropic';
 
@@ -168,11 +168,6 @@ interface ImportRunOptions {
       callback: () => this.activateDropzoneView(true),
     });
 
-    this.addCommand({
-      id: 'import-handwritten-notes-picker',
-      name: 'Import handwritten notes (file picker)',
-      callback: () => this.openMobilePicker(),
-    });
 
     this.addCommand({
       id: 'add-handwritten-note',
@@ -804,7 +799,7 @@ interface ImportRunOptions {
 			new Notice('Configure a dropzone source in settings before importing.');
 			return;
 		}
-		new MobilePickerModal(this).open();
+		new PickerModal(this).open();
 	}
 
 	requestCancelImport(): boolean {
@@ -1822,6 +1817,7 @@ interface ImportRunOptions {
 				llmPresets: presets,
 				processedSources,
 				secretBindings,
+				autoClosePickerModal: raw.autoClosePickerModal ?? DEFAULT_SETTINGS.autoClosePickerModal,
 			},
 			openAIKeys,
 			azureOpenAIKeys,
@@ -1945,6 +1941,7 @@ interface ImportRunOptions {
 				llmPresets: [preset],
 				processedSources,
 				secretBindings: {},
+				autoClosePickerModal: DEFAULT_SETTINGS.autoClosePickerModal,
 			},
 			openAIKeys,
 			azureOpenAIKeys,

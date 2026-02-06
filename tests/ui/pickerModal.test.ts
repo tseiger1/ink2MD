@@ -4,9 +4,10 @@ import type { SourceConfig } from 'src/types';
 jest.mock('obsidian', () => ({
 	Modal: class {},
 	Notice: class {},
+	setIcon: () => {},
 }), { virtual: true });
 
-import { buildAcceptList } from 'src/ui/mobilePickerModal';
+import { buildAcceptList } from 'src/ui/pickerModal';
 
 const baseSource: SourceConfig = {
 	id: 'source-1',

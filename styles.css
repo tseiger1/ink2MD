@@ -448,6 +448,18 @@
   margin-bottom: 0.75rem;
 }
 
+.ink2md-mobile-picker-label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+.ink2md-mobile-picker-select {
+  width: 100%;
+  max-width: 420px;
+  margin-bottom: 1.25rem;
+}
+
 .ink2md-drop-status {
   color: var(--text-muted);
   font-size: 0.9rem;

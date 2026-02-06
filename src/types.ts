@@ -116,6 +116,7 @@ export interface Ink2MDSettings {
 	llmPresets: LLMPreset[];
 	processedSources: Record<string, ProcessedSourceInfo>;
 	secretBindings: Record<string, Record<string, string>>;
+	autoClosePickerModal: boolean;
 }
 
 export interface MarkdownGenerationContext {

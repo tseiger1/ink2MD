@@ -129,6 +129,7 @@ export const DEFAULT_SETTINGS: Ink2MDSettings = {
   llmPresets: [DEFAULT_LLM_PRESET],
   processedSources: {},
   secretBindings: {},
+  autoClosePickerModal: false,
 };
 
 export class Ink2MDSettingTab extends PluginSettingTab {
@@ -158,6 +159,27 @@ export class Ink2MDSettingTab extends PluginSettingTab {
 	});
     this.renderSourcesSection(containerEl);
     this.renderPresetsSection(containerEl);
+    this.renderInterfaceSection(containerEl);
+  }
+
+  private renderInterfaceSection(containerEl: HTMLElement) {
+    const { sectionEl } = this.createSection(
+      containerEl,
+      'Interface',
+      'Define interface behavior.',
+    );
+
+    new Setting(sectionEl)
+      .setName('Auto-close picker modal')
+      .setDesc('Close the picker automatically after a successful import.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.autoClosePickerModal)
+          .onChange(async (value) => {
+            this.plugin.settings.autoClosePickerModal = value;
+            await this.plugin.saveSettings();
+          }),
+      );
   }
 
   private renderSourcesSection(containerEl: HTMLElement) {
