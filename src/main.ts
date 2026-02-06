@@ -728,12 +728,108 @@ interface ImportRunOptions {
 	private async writeAttachments(note: ConvertedNote, folderPath: string): Promise<ImageEmbed[]> {
 		const adapter = this.app.vault.adapter;
 		const imageEmbeds: ImageEmbed[] = [];
+		const attachmentDir = this.resolveAttachmentDirectory(folderPath);
+		if (attachmentDir) {
+			await this.ensureDirectory(attachmentDir);
+		}
 		for (const page of note.pages) {
-			const imagePath = normalizePath(`${folderPath}/${page.fileName}`);
-			imageEmbeds.push({ path: `./${page.fileName}`, width: page.width });
+			const imagePath = attachmentDir
+				? normalizePath(`${attachmentDir}/${page.fileName}`)
+				: normalizePath(page.fileName);
+			imageEmbeds.push({ path: this.buildEmbedPath(folderPath, imagePath), width: page.width });
 			await adapter.writeBinary(imagePath, bufferToArrayBuffer(page.data));
 		}
 		return imageEmbeds;
+	}
+
+	private resolveAttachmentDirectory(noteFolder: string): string {
+		const locationSetting = this.getVaultConfigString('attachmentLocation').toLowerCase();
+		const folderSetting = this.getVaultConfigString('attachmentFolderPath');
+		const normalizedFolder = noteFolder?.trim() ? normalizePath(noteFolder) : '';
+		if (!folderSetting) {
+			return normalizedFolder;
+		}
+		if (
+			locationSetting === 'current' ||
+			locationSetting === 'default' ||
+			folderSetting === '.' ||
+			folderSetting === './'
+		) {
+			return normalizedFolder;
+		}
+		if (locationSetting === 'subfolder') {
+			const relative = this.sanitizeAttachmentSubfolderPath(folderSetting);
+			return relative ? this.joinPaths(normalizedFolder, relative) : normalizedFolder;
+		}
+		if (locationSetting === 'folder' || locationSetting === 'root' || locationSetting === 'vault') {
+			return normalizePath(folderSetting);
+		}
+		if (folderSetting.startsWith('./')) {
+			const relative = this.sanitizeAttachmentSubfolderPath(folderSetting);
+			return relative ? this.joinPaths(normalizedFolder, relative) : normalizedFolder;
+		}
+		return normalizePath(folderSetting);
+	}
+
+	private sanitizeAttachmentSubfolderPath(value: string): string {
+		if (!value?.trim()) {
+			return '';
+		}
+		let sanitized = value.trim();
+		while (sanitized.startsWith('./')) {
+			sanitized = sanitized.slice(2);
+		}
+		sanitized = sanitized.replace(/^[/\\]+/, '');
+		if (!sanitized) {
+			return '';
+		}
+		return sanitized
+			.split(/[\\/]/)
+			.map((segment) => segment.trim())
+			.filter((segment) => segment.length > 0 && segment !== '..')
+			.join('/');
+	}
+
+	private buildEmbedPath(noteFolder: string, targetPath: string): string {
+		const relative = this.getRelativePathBetween(noteFolder, targetPath);
+		if (!relative) {
+			return './';
+		}
+		if (relative.startsWith('.') || relative.startsWith('/')) {
+			return relative;
+		}
+		return `./${relative}`;
+	}
+
+	private getRelativePathBetween(fromFolder: string, targetPath: string): string {
+		const fromParts = this.splitPathSegments(fromFolder);
+		const toParts = this.splitPathSegments(targetPath);
+		let shared = 0;
+		while (shared < fromParts.length && shared < toParts.length && fromParts[shared] === toParts[shared]) {
+			shared += 1;
+		}
+		const upCount = Math.max(0, fromParts.length - shared);
+		const upSegments: string[] = Array.from({ length: upCount }, () => '..');
+		const downSegments = toParts.slice(shared);
+		return [...upSegments, ...downSegments].join('/');
+	}
+
+	private splitPathSegments(path: string): string[] {
+		const normalized = path?.trim() ? normalizePath(path) : '';
+		if (!normalized) {
+			return [];
+		}
+		return normalized.split('/').filter((segment) => segment.length > 0);
+	}
+
+	private getVaultConfigString(key: string): string {
+		const vault = this.app.vault as typeof this.app.vault & { getConfig?: (configKey: string) => unknown };
+		const getter = vault.getConfig;
+		if (typeof getter !== 'function') {
+			return '';
+		}
+		const value = getter.call(this.app.vault, key);
+		return typeof value === 'string' ? value : '';
 	}
 
 	private getMarkdownPath(note: ConvertedNote, folderPath: string): string {
