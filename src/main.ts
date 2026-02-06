@@ -44,6 +44,12 @@ type SourceFingerprint = {
 	mtimeMs: number;
 };
 
+type StatLike = {
+	size: number;
+	mtime?: number;
+	mtimeMs?: number;
+};
+
 type DroppedFileMetadata = {
 	displayName?: string;
 };
@@ -133,6 +139,7 @@ interface ImportRunOptions {
 	private stagedFiles = new Set<string>();
 	private stagedDisplayNames = new Map<string, string>();
 	private dropzoneCacheDir: string | null = null;
+	private warnedMissingFsCache = false;
 
 	getPluginName(): string {
 		return this.manifest?.name ?? 'Ink2MD';
@@ -955,13 +962,7 @@ interface ImportRunOptions {
 			return { shouldProcess: true };
 		}
 		const store = this.ensureProcessedStore();
-		let stats;
-		try {
-			stats = await this.app.vault.adapter.stat(source.filePath);
-		} catch (error) {
-			console.warn(`[ink2md] Unable to stat ${source.filePath}`, error);
-			return { shouldProcess: true };
-		}
+		const stats = await this.statForCaching(source.filePath);
 		if (!stats) {
 			return { shouldProcess: true };
 		}
@@ -1029,13 +1030,7 @@ interface ImportRunOptions {
 	}
 
 	private async computeFingerprint(source: NoteSource): Promise<SourceFingerprint | null> {
-		let stats;
-		try {
-			stats = await this.app.vault.adapter.stat(source.filePath);
-		} catch (error) {
-			console.warn(`[ink2md] Unable to stat ${source.filePath} for fingerprint`, error);
-			return null;
-		}
+		const stats = await this.statForCaching(source.filePath);
 		if (!stats) {
 			return null;
 		}
@@ -1060,6 +1055,54 @@ interface ImportRunOptions {
 			return stats.mtimeMs;
 		}
 		return 0;
+	}
+
+	private async statForCaching(filePath: string): Promise<StatLike | null> {
+		if (isAbsolutePath(filePath)) {
+			return await this.statAbsoluteFile(filePath);
+		}
+		try {
+			const stats = await this.app.vault.adapter.stat(filePath);
+			return stats ?? null;
+		} catch (error) {
+			console.warn(`[ink2md] Unable to stat ${filePath}`, error);
+			return null;
+		}
+	}
+
+	private async statAbsoluteFile(filePath: string): Promise<StatLike | null> {
+		const requireFn = getNodeRequire();
+		if (!requireFn) {
+			if (!this.warnedMissingFsCache) {
+				console.warn('[ink2md] Unable to cache absolute files: Node fs is unavailable.');
+				this.warnedMissingFsCache = true;
+			}
+			return null;
+		}
+		try {
+			const fsModule = requireFn('fs') as {
+				promises?: { stat?: (path: string) => Promise<{ size: number; mtimeMs?: number; mtime?: Date }> };
+			} | null;
+			const statFn = fsModule?.promises?.stat;
+			if (!statFn) {
+				if (!this.warnedMissingFsCache) {
+					console.warn('[ink2md] Unable to cache absolute files: fs.promises.stat is unavailable.');
+					this.warnedMissingFsCache = true;
+				}
+				return null;
+			}
+			const stats = await statFn(filePath);
+			const rawMtimeMs = typeof stats.mtimeMs === 'number' ? stats.mtimeMs : undefined;
+			const derivedMtime = rawMtimeMs ?? (stats.mtime instanceof Date ? stats.mtime.getTime() : undefined);
+			return {
+				size: stats.size,
+				mtime: derivedMtime,
+				mtimeMs: derivedMtime,
+			};
+		} catch (error) {
+			console.warn(`[ink2md] Unable to stat absolute file ${filePath}`, error);
+			return null;
+		}
 	}
 
 	private async resetFolder(folderPath: string) {

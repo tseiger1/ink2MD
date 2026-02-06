@@ -415,6 +415,13 @@
   border: 1px solid var(--background-modifier-border);
   padding: 0.4rem 0.6rem;
   background: var(--background-secondary);
+  width: 100%;
+  max-width: 100%;
+  min-height: 2.2rem;
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ink2md-dropzone {

@@ -1,5 +1,8 @@
 import type { DataAdapter } from 'obsidian';
 import { describe, expect, it } from '@jest/globals';
+import { promises as fs } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { hashFile } from 'src/utils/hash';
 import { sha1String } from 'src/utils/sha1';
 
@@ -32,5 +35,24 @@ describe('hashFile', () => {
     } as unknown as DataAdapter;
 
     await expect(hashFile(adapter, '/vault/missing.txt')).rejects.toThrow();
+  });
+
+  it('falls back to Node fs when hashing absolute paths', async () => {
+    const tempDir = await fs.mkdtemp(join(tmpdir(), 'ink2md-hash-'));
+    try {
+      const filePath = join(tempDir, 'note.txt');
+      await fs.writeFile(filePath, 'cached note');
+      const adapter = {
+        readBinary: async () => {
+          throw new Error('adapter cannot read');
+        },
+      } as unknown as DataAdapter;
+
+      const result = await hashFile(adapter, filePath);
+
+      expect(result).toBe(sha1String('cached note'));
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
