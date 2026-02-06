@@ -146,6 +146,17 @@
   align-items: center;
 }
 
+.is-mobile .ink2md-card-header {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.is-mobile .ink2md-card-actions {
+  margin-left: 0;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
 .ink2md-icon-button {
   width: 26px;
   height: 26px;

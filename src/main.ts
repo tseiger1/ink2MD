@@ -1065,7 +1065,8 @@ interface ImportRunOptions {
 	}
 
 	private isMobileApp(): boolean {
-		return (this.app as { isMobile?: boolean }).isMobile === true;
+		const appInfo = this.app as { isMobile?: boolean; isMobileApp?: boolean; platform?: string };
+		return appInfo.isMobile === true || appInfo.isMobileApp === true || appInfo.platform === 'mobile';
 	}
 
 	private async readBinaryFile(filePath: string): Promise<ArrayBuffer> {
