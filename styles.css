@@ -157,6 +157,26 @@
   flex-wrap: wrap;
 }
 
+.is-mobile .ink2md-header-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.is-mobile .ink2md-header-actions .ink2md-text-button {
+  width: 100%;
+  justify-content: center;
+}
+
+.is-mobile .ink2md-card-actions .ink2md-text-button,
+.is-mobile .ink2md-card-actions .ink2md-icon-button {
+  height: 32px;
+}
+
+.is-mobile .ink2md-card-actions .ink2md-text-button {
+  display: inline-flex;
+  align-items: center;
+}
+
 .ink2md-icon-button {
   width: 26px;
   height: 26px;
