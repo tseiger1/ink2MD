@@ -53,6 +53,13 @@ export function joinPaths(...segments: string[]): string {
 	return hasLeadingSlash ? `/${normalized}` : normalized;
 }
 
+export function isAbsolutePath(filePath: string): boolean {
+	if (filePath.startsWith('/')) {
+		return true;
+	}
+	return /^[a-zA-Z]:[\\/]/.test(filePath);
+}
+
 export function getRelativePath(rootDir: string, fullPath: string): string {
 	const rootNormalized = stripTrailingSlash(normalizeSeparators(rootDir));
 	const fullNormalized = normalizeSeparators(fullPath);

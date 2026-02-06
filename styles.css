@@ -108,7 +108,11 @@
 }
 
 .ink2md-settings-section > .setting-item:first-of-type {
-  margin-top: 0.75rem;
+  margin-top: 0;
+}
+
+.ink2md-interface-section .ink2md-section-header {
+  margin-bottom: 1rem;
 }
 
 .ink2md-hidden-input {

@@ -1,9 +1,39 @@
 import type { DataAdapter, FileStats } from 'obsidian';
+import { isAbsolutePath } from '../utils/path';
+import { getNodeRequire } from '../utils/node';
+
+type FsPromises = {
+	stat: (path: string) => Promise<{ isDirectory: () => boolean }>;
+};
+
+function getFsPromises(): FsPromises | null {
+	const requireFn = getNodeRequire();
+	if (!requireFn) {
+		return null;
+	}
+	try {
+		const fsModule = requireFn('fs') as { promises?: FsPromises } | null;
+		return fsModule?.promises ?? null;
+	} catch (error) {
+		console.warn('[ink2md] Unable to load fs promises for directory checks.', error);
+		return null;
+	}
+}
 import { NoteSource, SourceConfig } from '../types';
 import { collectImageSources } from './imageImporter';
 import { collectPdfSources } from './pdfImporter';
 
 async function isDirectory(adapter: DataAdapter, pathStr: string): Promise<boolean> {
+	const fsPromises = isAbsolutePath(pathStr) ? getFsPromises() : null;
+	if (fsPromises) {
+		try {
+			const stats = await fsPromises.stat(pathStr);
+			return stats.isDirectory();
+		} catch (error) {
+			console.warn(`[ink2md] Unable to access ${pathStr}:`, error);
+			return false;
+		}
+	}
 	let stats: FileStats | null = null;
 	try {
 		stats = await adapter.stat(pathStr);

@@ -168,6 +168,7 @@ export class Ink2MDSettingTab extends PluginSettingTab {
       'Interface',
       'Define interface behavior.',
     );
+    sectionEl.addClass('ink2md-interface-section');
 
     new Setting(sectionEl)
       .setName('Auto-close picker modal')

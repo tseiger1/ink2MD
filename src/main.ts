@@ -17,7 +17,8 @@ import { LLMService } from './llm';
 import { buildMarkdown, buildFrontMatter, buildPagesSection } from './markdown/generator';
 import { hashFile } from './utils/hash';
 import { createStableId, slugifyFilePath } from './utils/naming';
-import { getBasename, getDirname, getExtension, joinPaths as joinPathSegments } from './utils/path';
+import { getBasename, getDirname, getExtension, isAbsolutePath, joinPaths as joinPathSegments } from './utils/path';
+import { getNodeRequire } from './utils/node';
 import { isImageFile } from './importers/imageImporter';
 import { isPdfFile } from './importers/pdfImporter';
 import { Ink2MDDropView, VIEW_TYPE_INK2MD_DROP } from './ui/dropView';
@@ -1070,7 +1071,28 @@ interface ImportRunOptions {
 	}
 
 	private async readBinaryFile(filePath: string): Promise<ArrayBuffer> {
-		return this.app.vault.adapter.readBinary(filePath);
+		if (isAbsolutePath(filePath)) {
+			const requireFn = getNodeRequire();
+			if (requireFn) {
+				try {
+					const fsModule = requireFn('fs') as { promises?: { readFile: (path: string) => Promise<Uint8Array> } } | null;
+					const data = await fsModule?.promises?.readFile(filePath);
+					if (!data) {
+						throw new Error('fs.promises.readFile unavailable');
+					}
+					return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+				} catch (error) {
+					console.warn(`[ink2md] Unable to read absolute file ${filePath}`, error);
+				}
+			}
+		}
+		const adapter = this.app.vault.adapter;
+		try {
+			return await adapter.readBinary(filePath);
+		} catch (error) {
+			const fallbackPath = isAbsolutePath(filePath) && filePath.startsWith('/') ? filePath.slice(1) : filePath;
+			return await adapter.readBinary(fallbackPath);
+		}
 	}
 
 	private async ensureDirectory(path: string) {
