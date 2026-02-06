@@ -767,7 +767,6 @@ interface ImportRunOptions {
 		this.statusBarEl = this.addStatusBarItem();
 		this.statusBarEl.addClass('ink2md-status');
 		this.statusIconEl = this.statusBarEl.createSpan({ cls: 'ink2md-status-icon' });
-		this.statusBarEl.createSpan({ cls: 'ink2md-status-label', text: 'Ink2MD' });
 		this.statusIconEl.addEventListener('animationiteration', () => {
 			if (this.pendingSpinnerStop) {
 				this.statusIconEl?.classList.remove('is-spinning');
