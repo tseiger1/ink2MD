@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from 'obsidian';
+import { Notice, Platform, Plugin, TFile, normalizePath, setIcon, setTooltip } from 'obsidian';
 import type { SecretStorage } from 'obsidian';
 import { DEFAULT_SETTINGS, Ink2MDSettingTab } from './settings';
 import type {
@@ -1067,8 +1067,15 @@ interface ImportRunOptions {
 	}
 
 	private isMobileApp(): boolean {
+		if (Platform?.isMobileApp || Platform?.isMobile) {
+			return true;
+		}
 		const appInfo = this.app as { isMobile?: boolean; isMobileApp?: boolean; platform?: string };
-		return appInfo.isMobile === true || appInfo.isMobileApp === true || appInfo.platform === 'mobile';
+		if (appInfo.isMobile === true || appInfo.isMobileApp === true) {
+			return true;
+		}
+		const platform = appInfo.platform?.toLowerCase() ?? '';
+		return platform === 'mobile' || platform.startsWith('mobile-');
 	}
 
 	private async readBinaryFile(filePath: string): Promise<ArrayBuffer> {
