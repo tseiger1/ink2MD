@@ -131,6 +131,7 @@ interface ImportRunOptions {
 	private anthropicSecrets: Record<string, string | null> = {};
 	private notifiedMissingSecretStorage = false;
 	private stagedFiles = new Set<string>();
+	private stagedDisplayNames = new Map<string, string>();
 	private dropzoneCacheDir: string | null = null;
 
 	getPluginName(): string {
@@ -1090,6 +1091,7 @@ interface ImportRunOptions {
 		try {
 			return await adapter.readBinary(filePath);
 		} catch (error) {
+			console.warn(`[ink2md] Unable to read ${filePath}, retrying with fallback path.`, error);
 			const fallbackPath = isAbsolutePath(filePath) && filePath.startsWith('/') ? filePath.slice(1) : filePath;
 			return await adapter.readBinary(fallbackPath);
 		}
@@ -1154,6 +1156,7 @@ interface ImportRunOptions {
 		await this.app.vault.adapter.writeBinary(stagedPath, data);
 		this.stagedFiles.add(stagedPath);
 		const displayName = fileName?.trim()?.length ? fileName.trim() : safeName;
+		this.rememberStagedDisplayName(stagedPath, displayName);
 		return { path: stagedPath, displayName };
 	}
 
@@ -1165,6 +1168,7 @@ interface ImportRunOptions {
 				console.warn(`[ink2md] Unable to delete staged file ${filePath}`, error);
 			}
 			this.stagedFiles.delete(filePath);
+			this.forgetStagedDisplayName(filePath);
 		}
 	}
 
@@ -1204,6 +1208,10 @@ interface ImportRunOptions {
 		if (provided?.trim()) {
 			return provided.trim();
 		}
+		const remembered = this.lookupStagedDisplayName(filePath);
+		if (remembered) {
+			return remembered;
+		}
 		const basename = getBasename(filePath);
 		if (this.dropzoneCacheDir && filePath.startsWith(this.dropzoneCacheDir)) {
 			const parts = basename.split('-');
@@ -1212,6 +1220,50 @@ interface ImportRunOptions {
 			}
 		}
 		return basename || null;
+	}
+
+	private lookupStagedDisplayName(filePath: string): string | null {
+		const trimmedPath = filePath?.trim();
+		if (!trimmedPath) {
+			return null;
+		}
+		const direct = this.stagedDisplayNames.get(trimmedPath);
+		if (direct?.trim()) {
+			return direct.trim();
+		}
+		const normalized = normalizePath(trimmedPath);
+		if (normalized && normalized !== trimmedPath) {
+			const normalizedMatch = this.stagedDisplayNames.get(normalized);
+			if (normalizedMatch?.trim()) {
+				return normalizedMatch.trim();
+			}
+		}
+		return null;
+	}
+
+	private rememberStagedDisplayName(filePath: string, displayName: string) {
+		const trimmedPath = filePath?.trim();
+		const trimmedName = displayName?.trim();
+		if (!trimmedPath || !trimmedName) {
+			return;
+		}
+		this.stagedDisplayNames.set(trimmedPath, trimmedName);
+		const normalized = normalizePath(trimmedPath);
+		if (normalized && normalized !== trimmedPath) {
+			this.stagedDisplayNames.set(normalized, trimmedName);
+		}
+	}
+
+	private forgetStagedDisplayName(filePath: string) {
+		const trimmedPath = filePath?.trim();
+		if (!trimmedPath) {
+			return;
+		}
+		this.stagedDisplayNames.delete(trimmedPath);
+		const normalized = normalizePath(trimmedPath);
+		if (normalized && normalized !== trimmedPath) {
+			this.stagedDisplayNames.delete(normalized);
+		}
 	}
 
 	private buildBasenameForDrop(filePath: string, displayName: string | null): string {
