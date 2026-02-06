@@ -1,7 +1,7 @@
 {
 	"id": "ink2md",
 	"name": "Ink2MD",
-	"version": "0.2.7",
+	"version": "0.2.8",
 	"minAppVersion": "1.6.0",
 	"description": "Import handwritten notebook files, convert them to PNG pages, and summarize with a vision LLM.",
 	"author": "Thomas Schweiger",

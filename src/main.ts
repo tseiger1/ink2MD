@@ -138,7 +138,7 @@ interface ImportRunOptions {
 		return this.manifest?.name ?? 'Ink2MD';
 	}
 
-	  async onload() {
+  async onload() {
     await this.loadSettings();
 
     this.registerView(VIEW_TYPE_INK2MD_DROP, (leaf) => new Ink2MDDropView(leaf, this));
@@ -146,17 +146,18 @@ interface ImportRunOptions {
       this.activateDropzoneView(false).catch((error) => console.error(error));
     });
 
-    if (this.isMobileApp()) {
+    const isMobileApp = this.isMobileApp();
+
+    if (isMobileApp) {
       this.addRibbonIcon('pen-tool', 'Add handwritten note', () => {
         this.openMobilePicker();
       });
-    } else {
+    }
+
+    if (!isMobileApp) {
       this.addRibbonIcon('pen-tool', 'Import handwritten notes', () => {
         this.triggerImport().catch((error) => console.error(error));
       });
-    }
-
-    if (!this.isMobileApp()) {
       this.addCommand({
         id: 'import-handwritten-notes',
         name: 'Import handwritten notes',
