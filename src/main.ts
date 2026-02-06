@@ -136,7 +136,7 @@ interface ImportRunOptions {
 		return this.manifest?.name ?? 'Ink2MD';
 	}
 
-  async onload() {
+	  async onload() {
     await this.loadSettings();
 
     this.registerView(VIEW_TYPE_INK2MD_DROP, (leaf) => new Ink2MDDropView(leaf, this));
@@ -144,15 +144,23 @@ interface ImportRunOptions {
       this.activateDropzoneView(false).catch((error) => console.error(error));
     });
 
-    this.addRibbonIcon('pen-tool', 'Import handwritten notes', () => {
-      this.triggerImport().catch((error) => console.error(error));
-    });
+    if (this.isMobileApp()) {
+      this.addRibbonIcon('pen-tool', 'Add handwritten note', () => {
+        this.openMobilePicker();
+      });
+    } else {
+      this.addRibbonIcon('pen-tool', 'Import handwritten notes', () => {
+        this.triggerImport().catch((error) => console.error(error));
+      });
+    }
 
-    this.addCommand({
-      id: 'import-handwritten-notes',
-      name: 'Import handwritten notes',
-      callback: () => this.triggerImport(),
-    });
+    if (!this.isMobileApp()) {
+      this.addCommand({
+        id: 'import-handwritten-notes',
+        name: 'Import handwritten notes',
+        callback: () => this.triggerImport(),
+      });
+    }
 
     this.addCommand({
       id: 'open-dropzone-view',
@@ -163,6 +171,12 @@ interface ImportRunOptions {
     this.addCommand({
       id: 'import-handwritten-notes-picker',
       name: 'Import handwritten notes (file picker)',
+      callback: () => this.openMobilePicker(),
+    });
+
+    this.addCommand({
+      id: 'add-handwritten-note',
+      name: 'Add handwritten note',
       callback: () => this.openMobilePicker(),
     });
 
@@ -762,13 +776,7 @@ interface ImportRunOptions {
 		});
 		this.statusIconEl.addEventListener('click', () => {
 			if (this.isImporting) {
-				if (this.cancelRequested) {
-					return;
-				}
-				this.cancelRequested = true;
-				this.abortController?.abort();
-					this.setStatus('Cancelling');
-					new Notice('Cancelling current import...');
+				this.requestCancelImport();
 				return;
 			}
 			this.triggerImport().catch((error) => console.error(error));
@@ -798,6 +806,17 @@ interface ImportRunOptions {
 			return;
 		}
 		new MobilePickerModal(this).open();
+	}
+
+	requestCancelImport(): boolean {
+		if (!this.isImporting || this.cancelRequested) {
+			return false;
+		}
+		this.cancelRequested = true;
+		this.abortController?.abort();
+		this.setStatus('Cancelling');
+		new Notice('Cancelling current import...');
+		return true;
 	}
 
 	private setSpinner(active: boolean) {

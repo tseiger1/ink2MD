@@ -7,8 +7,15 @@ export const VIEW_TYPE_INK2MD_DROP = 'ink2md-drop-view';
 export class Ink2MDDropView extends ItemView {
   private plugin: Ink2MDPlugin;
   private fileInput: HTMLInputElement | null = null;
-  private statusEl: HTMLElement | null = null;
   private selectedSourceId: string | null = null;
+  private penIconEl: HTMLElement | null = null;
+  private pendingSpinnerStop = false;
+  private isImporting = false;
+  private dropzoneTitleEl: HTMLElement | null = null;
+  private dropzoneSubtitleEl: HTMLElement | null = null;
+  private isMobile = false;
+  private statusTimeout: number | null = null;
+  private cancelRequested = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: Ink2MDPlugin) {
     super(leaf);
@@ -32,24 +39,30 @@ export class Ink2MDDropView extends ItemView {
   }
 
   async onClose() {
-    this.containerEl.empty();
+    this.contentEl.empty();
   }
 
   refresh() {
     this.render();
   }
 
-  private render() {
-    const container = this.containerEl;
-    container.empty();
-    container.addClass('ink2md-drop-view-container');
+	private render() {
+		const container = this.contentEl;
+		container.empty();
+		container.addClass('ink2md-drop-view-container');
+		this.penIconEl = null;
+		this.dropzoneTitleEl = null;
+		this.dropzoneSubtitleEl = null;
+		this.isMobile = (this.plugin.app as { isMobile?: boolean }).isMobile === true;
 
     const sources = this.plugin.getDropzoneSources();
 		if (!sources.length) {
 			const emptyState = container.createDiv({ cls: 'ink2md-drop-empty' });
 			emptyState.createEl('h3', { text: 'Set up manual imports' });
 			emptyState.createEl('p', {
-				text: 'Create a dropzone source in the plugin settings to start dragging files here.',
+				text: this.isMobile
+					? 'Create a dropzone source in the plugin settings to use the file picker here.'
+					: 'Create a dropzone source in the plugin settings to start dragging files here.',
 			});
 			return;
 		}
@@ -59,11 +72,13 @@ export class Ink2MDDropView extends ItemView {
     }
 
     const wrapper = container.createDiv({ cls: 'ink2md-drop-view' });
-    const header = wrapper.createDiv({ cls: 'ink2md-drop-header' });
-    header.createEl('h3', { text: 'Drop handwritten notes' });
-    header.createEl('p', {
-      text: 'Dropped files are imported using your selected source settings.',
-    });
+	const header = wrapper.createDiv({ cls: 'ink2md-drop-header' });
+	header.createEl('h3', { text: this.isMobile ? 'Select handwritten notes' : 'Drop handwritten notes' });
+	header.createEl('p', {
+		text: this.isMobile
+			? 'Selected files are imported using your chosen source settings.'
+			: 'Files you add here will be imported to the selected target.',
+	});
 
     const sourceRow = wrapper.createDiv({ cls: 'ink2md-drop-row' });
     const label = sourceRow.createEl('label', { text: 'Target' });
@@ -95,33 +110,53 @@ export class Ink2MDDropView extends ItemView {
       void this.handleDroppedFiles(Array.from(event.dataTransfer?.files ?? []));
     });
     dropzone.addEventListener('click', () => {
+      if (this.isImporting) {
+        if (this.plugin.requestCancelImport()) {
+          this.setSpinner(false);
+          this.cancelRequested = true;
+          this.showDropzoneStatus('Cancelled', 'Import cancelled.', 2000);
+        }
+        return;
+      }
       this.fileInput?.click();
     });
 
     const iconWrapper = dropzone.createDiv({ cls: 'ink2md-dropzone-icon-wrapper' });
     const docIcon = iconWrapper.createDiv({ cls: 'ink2md-dropzone-doc-icon' });
     setIcon(docIcon, 'file');
-    const penIcon = iconWrapper.createDiv({ cls: 'ink2md-dropzone-pen-icon' });
-    setIcon(penIcon, 'pen-tool');
-
-    dropzone.createDiv({ cls: 'ink2md-dropzone-title', text: 'Drop files here' });
-    dropzone.createDiv({
-      cls: 'ink2md-dropzone-subtitle',
-      text: 'or click to browse for files',
+    this.penIconEl = iconWrapper.createDiv({ cls: 'ink2md-dropzone-pen-icon' });
+    setIcon(this.penIconEl, 'pen-tool');
+    this.penIconEl.addEventListener('animationiteration', () => {
+      if (this.pendingSpinnerStop) {
+        this.penIconEl?.classList.remove('is-spinning');
+        this.pendingSpinnerStop = false;
+        if (!this.statusTimeout && !this.cancelRequested) {
+          this.updateDropzoneCopy(false);
+        }
+      }
     });
+
+	this.dropzoneTitleEl = dropzone.createDiv({
+		cls: 'ink2md-dropzone-title',
+		text: this.isMobile ? 'Tap to select files' : 'Drop files here',
+	});
+	this.dropzoneSubtitleEl = dropzone.createDiv({
+		cls: 'ink2md-dropzone-subtitle',
+		text: this.isMobile ? 'Use the picker to browse or take photos.' : 'or click to browse for files',
+	});
 
 	this.fileInput = wrapper.createEl('input', { type: 'file' });
 	this.fileInput.addClass('ink2md-hidden-input');
     this.fileInput.multiple = true;
     this.fileInput.accept = this.getAcceptForSource();
-    this.fileInput.addEventListener('change', () => {
-      void this.handleDroppedFiles(Array.from(this.fileInput?.files ?? []));
-      if (this.fileInput) {
-        this.fileInput.value = '';
-      }
-    });
+	this.fileInput.addEventListener('change', () => {
+		void this.handleDroppedFiles(Array.from(this.fileInput?.files ?? []));
+		if (this.fileInput) {
+			this.fileInput.value = '';
+		}
+	});
 
-    this.statusEl = wrapper.createDiv({ cls: 'ink2md-drop-status', text: 'Waiting for files...' });
+	this.updateDropzoneCopy(this.isImporting);
   }
 
   private getAcceptForSource(): string {
@@ -146,7 +181,7 @@ export class Ink2MDDropView extends ItemView {
 
   private async handleDroppedFiles(files: File[]) {
     if (!files.length) {
-      this.setStatus('No files selected.');
+      new Notice('No files selected.');
       return;
     }
     const source = this.getSelectedSource();
@@ -166,14 +201,22 @@ export class Ink2MDDropView extends ItemView {
         metadata[entry.path] = { displayName: entry.displayName };
       }
     }
-    this.setStatus(`Importing ${paths.length} file${paths.length === 1 ? '' : 's'}...`);
+    this.cancelRequested = false;
+    this.showDropzoneStatus('Importing', this.isMobile ? 'Tap to cancel.' : 'Click to cancel.');
+    this.setSpinner(true);
     try {
       await this.plugin.importDroppedFiles(source.id, paths, metadata);
-      this.setStatus('Files queued for import.');
+      if (!this.cancelRequested) {
+        this.showDropzoneStatus('Done', 'Import complete.', 2000);
+      }
     } catch (error) {
       console.error('[ink2md] Failed to import dropped files', error);
-      this.setStatus('Import failed. Check logs for details.');
+      new Notice('Import failed. Check logs for details.');
+      if (!this.cancelRequested) {
+        this.showDropzoneStatus('Import failed', 'Check logs for details.', 2000);
+      }
     } finally {
+      this.setSpinner(false);
       if (staged.length) {
         await this.plugin.cleanupStagedFiles(staged);
       }
@@ -203,9 +246,62 @@ export class Ink2MDDropView extends ItemView {
     return { entries, staged };
   }
 
-  private setStatus(message: string) {
-    if (this.statusEl) {
-      this.statusEl.setText(message);
+  private setSpinner(active: boolean) {
+    if (!this.penIconEl) {
+      return;
     }
+    if (active) {
+      this.pendingSpinnerStop = false;
+      this.isImporting = true;
+      this.penIconEl.classList.add('is-spinning');
+    } else {
+      if (this.penIconEl.classList.contains('is-spinning')) {
+        this.pendingSpinnerStop = true;
+      } else {
+        this.pendingSpinnerStop = false;
+      }
+      this.isImporting = false;
+      if (!this.pendingSpinnerStop) {
+        if (!this.statusTimeout && !this.cancelRequested) {
+          this.updateDropzoneCopy(false);
+        }
+      }
+    }
+  }
+
+  private updateDropzoneCopy(isImporting: boolean) {
+    if (isImporting) {
+      this.applyText(this.dropzoneTitleEl, 'Importing');
+      this.applyText(this.dropzoneSubtitleEl, this.isMobile ? 'Tap to cancel.' : 'Click to cancel.');
+      return;
+    }
+    const idleTitle = this.isMobile ? 'Tap to select files' : 'Drop files here';
+    const idleSubtitle = this.isMobile ? 'Use the picker to browse or take photos.' : 'or click to browse for files';
+    this.applyText(this.dropzoneTitleEl, idleTitle);
+    this.applyText(this.dropzoneSubtitleEl, idleSubtitle);
+  }
+
+  private showDropzoneStatus(title: string, subtitle: string, timeoutMs?: number) {
+    if (this.statusTimeout) {
+      window.clearTimeout(this.statusTimeout);
+      this.statusTimeout = null;
+    }
+    this.applyText(this.dropzoneTitleEl, title);
+    this.applyText(this.dropzoneSubtitleEl, subtitle);
+    if (timeoutMs) {
+      this.statusTimeout = window.setTimeout(() => {
+        this.statusTimeout = null;
+        if (!this.isImporting) {
+          this.updateDropzoneCopy(false);
+        }
+      }, timeoutMs);
+    }
+  }
+
+  private applyText(element: HTMLElement | null, text: string) {
+    if (!element) {
+      return;
+    }
+    element.textContent = text;
   }
 }
