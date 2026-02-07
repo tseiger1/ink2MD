@@ -1,3 +1,4 @@
+/* eslint-disable import/no-nodejs-modules */
 import type { DataAdapter } from 'obsidian';
 import { describe, expect, it } from '@jest/globals';
 import { promises as fs } from 'fs';
