@@ -189,6 +189,45 @@ afterAll(() => {
     expect(result).toBeNull();
     expect(consoleErrorSpy).toHaveBeenCalled();
   });
+
+	it('keeps the viewport dimensions when max width and dpi are not specified', async () => {
+		const result = await convertPdfSource(source, 0, 0, readFileMock);
+		expect(result?.pages[0]?.width).toBe(1200);
+		expect(result?.pages[0]?.height).toBe(800);
+	});
+
+	it('returns null when reading the PDF file fails', async () => {
+		readFileMock.mockRejectedValueOnce(new Error('file missing'));
+
+		const result = await convertPdfSource(source, 600, 144, readFileMock);
+
+		expect(result).toBeNull();
+		expect(consoleErrorSpy).toHaveBeenCalled();
+	});
+
+	it('propagates errors from individual page renders', async () => {
+		const renderPromise = Promise.reject(new Error('render failed'));
+		renderPromise.catch(() => {});
+		const failingPage: MockPdfPage = {
+			...createPage(1),
+			render: jest.fn(() => ({ promise: renderPromise })),
+		};
+		const pdf: MockPdfDocument = {
+			numPages: 1,
+			getPage: jest.fn(async () => failingPage),
+			destroy: jest.fn(async () => {}),
+		};
+		const loadingTask: MockPdfLoadingTask = { promise: Promise.resolve(pdf) };
+		const mock = getDocumentMock;
+		if (!mock) {
+			throw new Error('pdfjs getDocument mock was not initialized');
+		}
+		mock.mockReturnValueOnce(loadingTask as unknown as PdfLoadingTask);
+		const result = await convertPdfSource(source, 600, 144, readFileMock);
+
+		expect(result).toBeNull();
+		expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to convert PDF'), expect.any(Error));
+	});
 });
 
 function createCanvas(label: string): MockCanvas {

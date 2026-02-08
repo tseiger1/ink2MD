@@ -26,6 +26,7 @@ class MockImage {
   onerror: ((err: unknown) => void) | null = null;
 
 	set src(_value: string) {
+		MockImage.lastSrc = _value;
 		setTimeout(() => {
 			if (MockImage.shouldError) {
 				this.onerror?.(MockImage.errorPayload ?? new Error('image error'));
@@ -39,10 +40,12 @@ class MockImage {
 
   static shouldError = false;
   static errorPayload: unknown = null;
+  static lastSrc: string | null = null;
 
 	static reset() {
 		MockImage.shouldError = false;
 		MockImage.errorPayload = null;
+		MockImage.lastSrc = null;
 	}
 }
 
@@ -157,5 +160,42 @@ describe('convertImageSource', () => {
 		const loggedError = lastCall?.[1] as unknown;
 		expect(loggedError).toBeInstanceOf(Error);
 		expect((loggedError as Error).message).toBe('decoder exploded');
+	});
+
+	it('falls back to PNG mime type when the extension is unknown', async () => {
+		const unknownSource: NoteSource = {
+			...source,
+			filePath: '/vault/imports/page.custom',
+		};
+
+		await convertImageSource(unknownSource, 800, readFileMock);
+
+		expect(MockImage.lastSrc).toMatch(/^data:image\/png;base64,/);
+	});
+
+	it('preserves original dimensions when no max width is provided', async () => {
+		imageDimensions.width = 900;
+		imageDimensions.height = 300;
+
+		const result = await convertImageSource(source, 0, readFileMock);
+
+		expect(result?.pages[0]?.width).toBe(900);
+		expect(result?.pages[0]?.height).toBe(300);
+	});
+
+	it('handles malformed data URLs by returning empty buffers', async () => {
+		const malformedCanvas = {
+			width: 0,
+			height: 0,
+			getContext: jest.fn(() => ({ drawImage: jest.fn() })),
+			toDataURL: jest.fn(() => 'data:image/png;base64'),
+		} as unknown as MockCanvas;
+		globalThis.document = {
+			createElement: jest.fn(() => malformedCanvas),
+		} as unknown as Document;
+
+		const result = await convertImageSource(source, 800, readFileMock);
+
+		expect(result?.pages[0]?.data.length).toBe(0);
 	});
 });
