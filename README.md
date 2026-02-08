@@ -6,6 +6,7 @@
 [![Test](https://img.shields.io/github/actions/workflow/status/tseiger1/ink2md/ci.yml?branch=main&label=test)](https://github.com/tseiger1/ink2md/actions/workflows/ci.yml)
 [![Build](https://img.shields.io/github/actions/workflow/status/tseiger1/ink2md/ci.yml?branch=main&label=build)](https://github.com/tseiger1/ink2md/actions/workflows/ci.yml)
 [![Release](https://github.com/tseiger1/ink2md/actions/workflows/release.yml/badge.svg)](https://github.com/tseiger1/ink2md/actions/workflows/release.yml)
+[![codecov](https://codecov.io/gh/tseiger1/ink2md/branch/main/graph/badge.svg)](https://codecov.io/gh/tseiger1/ink2md)
 
 Ink2MD imports your handwriting into Obsidian as Markdown. Point it at the folders that sync your handwritten notes, drop images of sticky notes or whiteboards into the app, or snap a fresh photo, and Ink2MD converts each page to PNG, runs OCR with a vision-capable LLM (OpenAI, Azure OpenAI, Anthropic, Google Gemini, or any OpenAI-compatible local endpoint), and writes rich Markdown next to the attachments in your vault.
 
