@@ -1,6 +1,6 @@
 {
   "name": "ink2md",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Import handwritten notes from disk, convert pages to PNG, and ask a vision LLM to produce Markdown.",
   "main": "main.js",
   "type": "module",
