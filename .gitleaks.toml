@@ -1,0 +1,10 @@
+title = "Ink2MD gitleaks config"
+
+[allowlist]
+  description = "Allow internal secret identifiers used for secret storage"
+  regexes = [
+    '''ink2md-openai-api-key-''',
+    '''ink2md-azure-openai-api-key-''',
+    '''ink2md-gemini-api-key-''',
+    '''ink2md-anthropic-api-key-'''
+  ]
