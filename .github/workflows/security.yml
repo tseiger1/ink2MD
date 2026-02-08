@@ -5,34 +5,30 @@ on:
     inputs:
       node-version:
         type: string
-        required: false
         default: '20'
       package-manager:
         type: string
-        required: false
         default: 'npm'
       lockfile:
         type: string
-        required: false
         default: 'package-lock.json'
 
 permissions:
   contents: read
-  security-events: write
   pull-requests: read
+  security-events: write
   actions: read
 
 jobs:
-  security:
+  dependency-review:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ inputs.package-manager }}
-
       - name: Install dependencies
         run: |
           if [ "${{ inputs.package-manager }}" = "npm" ]; then
@@ -47,26 +43,49 @@ jobs:
             echo "Unknown package-manager: ${{ inputs.package-manager }}"
             exit 1
           fi
+      - uses: actions/dependency-review-action@v4
 
-      - name: Dependency review
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v4
-
-      - name: OSV scanner (lockfile)
-        uses: google/osv-scanner-action@main
+  osv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install OSV-Scanner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo google/osv-scanner --pattern "osv-scanner_*linux_amd64.tar.gz" --output osv-scanner.tar.gz
+          tar -xzf osv-scanner.tar.gz
+          sudo install osv-scanner /usr/local/bin/osv-scanner
+      - name: Run OSV-Scanner
+        run: osv-scanner --lockfile=${{ inputs.lockfile }} --format sarif --output osv-results.sarif
+      - name: Upload OSV SARIF
+        uses: github/codeql-action/upload-sarif@v3
         with:
-          scan-args: --lockfile=${{ inputs.lockfile }}
+          sarif_file: osv-results.sarif
 
-      - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Gitleaks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo gitleaks/gitleaks --pattern "gitleaks_*linux_x64.tar.gz" --output gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install gitleaks /usr/local/bin/gitleaks
+      - name: Run Gitleaks
+        run: gitleaks detect --source . --redact --report-format sarif --report-path gitleaks.sarif
+      - name: Upload Gitleaks SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks.sarif
 
   codeql:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
-
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
