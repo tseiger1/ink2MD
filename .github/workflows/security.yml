@@ -46,22 +46,12 @@ jobs:
       - uses: actions/dependency-review-action@v4
 
   osv:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install OSV-Scanner
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download --repo google/osv-scanner --pattern "osv-scanner_*_linux_amd64.tar.gz" --output osv-scanner.tar.gz
-          tar -xzf osv-scanner.tar.gz
-          sudo install osv-scanner /usr/local/bin/osv-scanner
-      - name: Run OSV-Scanner
-        run: osv-scanner --lockfile=${{ inputs.lockfile }} --format sarif --output osv-results.sarif
-      - name: Upload OSV SARIF
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: osv-results.sarif
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan-args: |-
+        --lockfile=${{ inputs.lockfile }}
+        --format sarif
+        --output osv-results.sarif
 
   gitleaks:
     runs-on: ubuntu-latest

@@ -12,6 +12,14 @@
 name: OSV-Scanner
 
 on:
+  workflow_call:
+    inputs:
+      scan-args:
+        type: string
+        default: |-
+          -r
+          --skip-git
+          ./
   pull_request:
     branches: [ "main" ]
   merge_group:
@@ -28,6 +36,15 @@ permissions:
   contents: read
 
 jobs:
+  scan-reusable:
+    if: ${{ github.event_name == 'workflow_call' }}
+    permissions:
+      security-events: write
+      contents: read
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@1f1242919d8a60496dd1874b24b62b2370ed4c78" # v1.7.1
+    with:
+      scan-args: ${{ inputs.scan-args }}
+
   scan-scheduled:
     if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
     uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@1f1242919d8a60496dd1874b24b62b2370ed4c78" # v1.7.1
