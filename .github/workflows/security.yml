@@ -53,7 +53,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download --repo google/osv-scanner --pattern "osv-scanner_*linux_amd64.tar.gz" --output osv-scanner.tar.gz
+          gh release download --repo google/osv-scanner --pattern "osv-scanner_*_linux_amd64.tar.gz" --output osv-scanner.tar.gz
           tar -xzf osv-scanner.tar.gz
           sudo install osv-scanner /usr/local/bin/osv-scanner
       - name: Run OSV-Scanner
