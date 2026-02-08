@@ -13,6 +13,17 @@ fix linting errors. But u# Obsidian community plugin
 - **Bundler: esbuild** (required for this sample - `esbuild.config.mjs` and build scripts depend on it). Alternative bundlers like Rollup or webpack are acceptable for other projects if they bundle all external dependencies into `main.js`.
 - Types: `obsidian` type definitions.
 
+## Agent workflow (TDD)
+
+Always follow this order when implementing any change:
+
+1. Add or adjust tests first to describe the desired behavior (they should fail before the code change).
+2. Implement the production code needed to make the new tests pass.
+3. Run linting (`npm run lint`).
+4. Run the full test suite with coverage (`npm test -- --coverage`).
+
+Do not reorder these steps.
+
 ### Commit message rules
 
 - Follow [Conventional Commits](https://www.conventionalcommits.org/) using the format `<type>[optional scope]: <short description>`.
