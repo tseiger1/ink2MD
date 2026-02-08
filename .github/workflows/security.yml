@@ -53,7 +53,7 @@ jobs:
         uses: actions/dependency-review-action@v4
 
       - name: OSV scanner (lockfile)
-        uses: google/osv-scanner-action@v1
+        uses: google/osv-scanner-action@main
         with:
           scan-args: --lockfile=${{ inputs.lockfile }}
 
