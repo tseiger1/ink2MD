@@ -58,6 +58,12 @@ describe('OpenAIVisionProvider', () => {
     await expect(provider.generateMarkdown(note, 256)).rejects.toThrow('OpenAI did not return any content.');
   });
 
+	it('throws when the API returns no choices at all', async () => {
+		mockCreate.mockResolvedValueOnce({ choices: [] });
+		const provider = new OpenAIVisionProvider(config);
+		await expect(provider.generateMarkdown(note, 512)).rejects.toThrow('OpenAI did not return any content.');
+	});
+
   it('streams chunks via handler', async () => {
     async function* chunkStream() {
       yield { choices: [{ delta: { content: 'first' } }] } as ChatCompletionChunk;
@@ -70,4 +76,15 @@ describe('OpenAIVisionProvider', () => {
     expect(handler).toHaveBeenNthCalledWith(1, 'first');
     expect(handler).toHaveBeenNthCalledWith(2, 'second');
   });
+
+	it('ignores stream chunks without delta content', async () => {
+		async function* emptyStream() {
+			yield { choices: [] } as ChatCompletionChunk;
+		}
+		mockCreate.mockResolvedValueOnce(emptyStream());
+		const provider = new OpenAIVisionProvider(config);
+		const handler: jest.MockedFunction<MarkdownStreamHandler> = jest.fn();
+		await provider.streamMarkdown(note, 300, handler);
+		expect(handler).not.toHaveBeenCalled();
+	});
 });

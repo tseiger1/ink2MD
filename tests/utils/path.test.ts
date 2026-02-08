@@ -32,4 +32,12 @@ describe('path utils', () => {
     expect(getRelativePath('/root', '/root/sub/file')).toBe('sub/file');
     expect(getRelativePath('/root', '/other/file')).toBe('');
   });
+
+	it('strips trailing slashes before computing relatives', () => {
+		expect(getRelativePath('/vault///', '/vault/notes/doc.md')).toBe('notes/doc.md');
+	});
+
+  it('returns empty relative paths when full path equals the root', () => {
+    expect(getRelativePath('/vault/', '/vault/')).toBe('');
+  });
 });
