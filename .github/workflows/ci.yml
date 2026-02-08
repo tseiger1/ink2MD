@@ -9,12 +9,16 @@ on:
 jobs:
   lint:
     uses: ./.github/workflows/lint.yml
+    secrets: inherit
   typecheck:
     needs: lint
     uses: ./.github/workflows/typecheck.yml
+    secrets: inherit
   test:
     needs: typecheck
     uses: ./.github/workflows/test.yml
+    secrets: inherit
   build:
     needs: test
     uses: ./.github/workflows/build.yml
+    secrets: inherit
