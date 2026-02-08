@@ -3,7 +3,9 @@ import type { ChatCompletionChunk } from 'openai/resources/chat/completions';
 import { OpenAIVisionProvider } from 'src/llm/openaiProvider';
 import type { ConvertedNote, MarkdownStreamHandler } from 'src/types';
 
-const mockCreate = jest.fn();
+type ChatCompletionCreate = (...args: unknown[]) => Promise<unknown>;
+
+const mockCreate = jest.fn() as jest.MockedFunction<ChatCompletionCreate>;
 jest.mock('openai', () => ({
   __esModule: true,
   default: class {
@@ -65,10 +67,10 @@ describe('OpenAIVisionProvider', () => {
 	});
 
   it('streams chunks via handler', async () => {
-    async function* chunkStream() {
-      yield { choices: [{ delta: { content: 'first' } }] } as ChatCompletionChunk;
-      yield { choices: [{ delta: { content: 'second' } }] } as ChatCompletionChunk;
-    }
+	 async function* chunkStream() {
+	   yield createChunk('first');
+	   yield createChunk('second');
+	 }
     mockCreate.mockResolvedValueOnce(chunkStream());
     const provider = new OpenAIVisionProvider(config);
     const handler: jest.MockedFunction<MarkdownStreamHandler> = jest.fn();
@@ -79,7 +81,7 @@ describe('OpenAIVisionProvider', () => {
 
 	it('ignores stream chunks without delta content', async () => {
 		async function* emptyStream() {
-			yield { choices: [] } as ChatCompletionChunk;
+			yield createEmptyChunk();
 		}
 		mockCreate.mockResolvedValueOnce(emptyStream());
 		const provider = new OpenAIVisionProvider(config);
@@ -88,3 +90,30 @@ describe('OpenAIVisionProvider', () => {
 		expect(handler).not.toHaveBeenCalled();
 	});
 });
+
+function createChunk(content?: string): ChatCompletionChunk {
+	return {
+		id: `chunk-${content ?? 'empty'}`,
+		created: Date.now(),
+		model: 'gpt-4o-mini',
+		object: 'chat.completion.chunk',
+		choices: [
+			{
+				index: 0,
+				finish_reason: null,
+				logprobs: null,
+				delta: { content },
+			},
+		],
+	};
+}
+
+function createEmptyChunk(): ChatCompletionChunk {
+	return {
+		id: 'chunk-empty',
+		created: Date.now(),
+		model: 'gpt-4o-mini',
+		object: 'chat.completion.chunk',
+		choices: [],
+	};
+}

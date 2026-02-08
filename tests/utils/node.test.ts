@@ -3,47 +3,52 @@ import type { NodeRequireLike } from 'src/utils/node';
 import { getNodeRequire, __setNativeRequireDisabledForTesting } from 'src/utils/node';
 
 describe('getNodeRequire', () => {
-  const globalWithRequire = globalThis as typeof globalThis & {
-    require?: NodeRequireLike;
-    window?: { require?: NodeRequireLike };
-  };
-  const originalGlobalRequire = globalWithRequire.require;
-  const originalWindow = globalWithRequire.window;
+  const globalAny = globalThis as Record<string, unknown>;
+  const originalGlobalRequire = globalAny.require as NodeRequireLike | undefined;
+  const originalWindow = globalAny.window as (Window & { require?: NodeRequireLike }) | undefined;
 
   beforeEach(() => {
-    globalWithRequire.require = undefined;
-    globalWithRequire.window = undefined;
+    Reflect.deleteProperty(globalAny, 'require');
+    Reflect.deleteProperty(globalAny, 'window');
     __setNativeRequireDisabledForTesting(false);
   });
 
   afterEach(() => {
-    globalWithRequire.require = originalGlobalRequire;
-    globalWithRequire.window = originalWindow;
+    if (typeof originalGlobalRequire !== 'undefined') {
+      globalAny.require = originalGlobalRequire;
+    } else {
+      Reflect.deleteProperty(globalAny, 'require');
+    }
+    if (typeof originalWindow !== 'undefined') {
+      globalAny.window = originalWindow;
+    } else {
+      Reflect.deleteProperty(globalAny, 'window');
+    }
     __setNativeRequireDisabledForTesting(false);
   });
 
   it('uses require exposed on globalThis when available', () => {
     const fake: NodeRequireLike = () => 'direct';
-    globalWithRequire.require = fake;
+    globalAny.require = fake;
     expect(getNodeRequire()).toBe(fake);
   });
 
   it('falls back to the native Node require when no overrides exist', () => {
-    globalWithRequire.require = undefined;
+    Reflect.deleteProperty(globalAny, 'require');
     expect(typeof getNodeRequire()).toBe('function');
   });
 
   it('uses require exposed on window when global require is missing', () => {
     const fake: NodeRequireLike = () => 'window';
-    globalWithRequire.require = undefined;
-    globalWithRequire.window = { require: fake };
+    Reflect.deleteProperty(globalAny, 'require');
+    globalAny.window = { require: fake } as Window & { require?: NodeRequireLike };
 
     expect(getNodeRequire()).toBe(fake);
   });
 
   it('returns null when no require implementation can be resolved', () => {
-    globalWithRequire.require = undefined;
-    globalWithRequire.window = undefined;
+    Reflect.deleteProperty(globalAny, 'require');
+    Reflect.deleteProperty(globalAny, 'window');
     __setNativeRequireDisabledForTesting(true);
 
     expect(getNodeRequire()).toBeNull();
