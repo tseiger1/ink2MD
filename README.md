@@ -1,6 +1,9 @@
 # Ink2MD
 
-[![Build & Test](https://github.com/tseiger1/ink2md/actions/workflows/lint.yml/badge.svg)](https://github.com/tseiger1/ink2md/actions/workflows/lint.yml)
+[![Lint](https://github.com/tseiger1/ink2md/actions/workflows/lint.yml/badge.svg)](https://github.com/tseiger1/ink2md/actions/workflows/lint.yml)
+[![Typecheck](https://github.com/tseiger1/ink2md/actions/workflows/typecheck.yml/badge.svg)](https://github.com/tseiger1/ink2md/actions/workflows/typecheck.yml)
+[![Test](https://github.com/tseiger1/ink2md/actions/workflows/test.yml/badge.svg)](https://github.com/tseiger1/ink2md/actions/workflows/test.yml)
+[![Build](https://github.com/tseiger1/ink2md/actions/workflows/build.yml/badge.svg)](https://github.com/tseiger1/ink2md/actions/workflows/build.yml)
 [![Release](https://github.com/tseiger1/ink2md/actions/workflows/release.yml/badge.svg)](https://github.com/tseiger1/ink2md/actions/workflows/release.yml)
 
 Ink2MD imports your handwriting into Obsidian as Markdown. Point it at the folders that sync your handwritten notes, drop images of sticky notes or whiteboards into the app, or snap a fresh photo, and Ink2MD converts each page to PNG, runs OCR with a vision-capable LLM (OpenAI, Azure OpenAI, Anthropic, Google Gemini, or any OpenAI-compatible local endpoint), and writes rich Markdown next to the attachments in your vault.
@@ -122,8 +125,7 @@ Presets store provider credentials, prompt template, image detail, and generatio
 ## Support & development
 - Spot a bug or have an idea? Open an issue on GitHub; collaboration keeps the plugin sharp.
 - Hacking locally? Clone the repo, run `npm install`, then `npm run build` (or `npm run dev` while iterating). Tests run with `npm test`, and linting with `npm run lint` (the same steps powering the badges up top).
-
-
+If Ink2MD saves you time and you want to support future work, just reach out and we can sort something out together.
 
 ---
 
