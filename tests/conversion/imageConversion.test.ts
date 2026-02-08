@@ -28,7 +28,7 @@ class MockImage {
 	set src(_value: string) {
 		setTimeout(() => {
 			if (MockImage.shouldError) {
-				this.onerror?.(new Error('image error'));
+				this.onerror?.(MockImage.errorPayload ?? new Error('image error'));
 				return;
 			}
 			this.width = imageDimensions.width;
@@ -38,6 +38,12 @@ class MockImage {
 	}
 
   static shouldError = false;
+  static errorPayload: unknown = null;
+
+	static reset() {
+		MockImage.shouldError = false;
+		MockImage.errorPayload = null;
+	}
 }
 
 globalThis.Image = MockImage as unknown as typeof Image;
@@ -76,13 +82,14 @@ describe('convertImageSource', () => {
     const rawBuffer = new TextEncoder().encode('raw-image');
     const rawArrayBuffer = rawBuffer.buffer.slice(rawBuffer.byteOffset, rawBuffer.byteOffset + rawBuffer.byteLength);
     readFileMock.mockResolvedValue(rawArrayBuffer);
-    MockImage.shouldError = false;
+    MockImage.reset();
     consoleErrorSpy.mockClear();
   });
 
   afterEach(() => {
     readFileMock.mockReset();
     globalThis.document = originalDocument;
+    MockImage.reset();
   });
 
   afterAll(() => {
@@ -116,7 +123,7 @@ describe('convertImageSource', () => {
 		expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to convert image'), expect.any(Error));
 	});
 
-  it('returns null when reading the file fails', async () => {
+	it('returns null when reading the file fails', async () => {
     readFileMock.mockRejectedValue(new Error('read error'));
 
     const result = await convertImageSource(source, 800, readFileMock);
@@ -124,4 +131,31 @@ describe('convertImageSource', () => {
     expect(result).toBeNull();
     expect(consoleErrorSpy).toHaveBeenCalled();
   });
+
+	it('returns null when the image buffer cannot be decoded', async () => {
+		MockImage.shouldError = true;
+		MockImage.errorPayload = null;
+
+		const result = await convertImageSource(source, 800, readFileMock);
+
+		expect(result).toBeNull();
+		expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to convert image'), expect.any(Error));
+	});
+
+	it('propagates ErrorEvent details from the image decoder', async () => {
+		MockImage.shouldError = true;
+		MockImage.errorPayload = new ErrorEvent('error', {
+			message: 'decoder failure',
+			error: new Error('decoder exploded'),
+		});
+
+		const result = await convertImageSource(source, 800, readFileMock);
+
+		expect(result).toBeNull();
+		const lastCall = consoleErrorSpy.mock.calls.at(-1);
+		expect(lastCall).toBeDefined();
+		const loggedError = lastCall?.[1] as unknown;
+		expect(loggedError).toBeInstanceOf(Error);
+		expect((loggedError as Error).message).toBe('decoder exploded');
+	});
 });

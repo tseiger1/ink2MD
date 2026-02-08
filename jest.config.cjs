@@ -5,6 +5,7 @@ module.exports = {
   moduleNameMapper: {
     '^src/(.*)$': '<rootDir>/src/$1',
   },
+  setupFilesAfterEnv: ['<rootDir>/tests/setup/globals.ts'],
   transform: {
     '^.+\\.ts$': [
       'ts-jest',

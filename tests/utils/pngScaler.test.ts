@@ -16,7 +16,7 @@ class MockImage {
 	set src(_value: string) {
 		setTimeout(() => {
 			if (MockImage.shouldError) {
-				this.onerror?.(new Error('load error'));
+				this.onerror?.(MockImage.errorPayload ?? new Error('load error'));
 				return;
 			}
 			this.width = imageDimensions.width;
@@ -26,6 +26,12 @@ class MockImage {
 	}
 
   static shouldError = false;
+  static errorPayload: unknown = null;
+
+	static reset() {
+		MockImage.shouldError = false;
+		MockImage.errorPayload = null;
+	}
 }
 
 globalThis.Image = MockImage as unknown as typeof Image;
@@ -66,7 +72,7 @@ describe('scalePngBufferToDataUrl', () => {
 
   afterEach(() => {
     globalThis.document = ORIGINAL_DOCUMENT;
-    MockImage.shouldError = false;
+    MockImage.reset();
   });
 
   afterAll(() => {
@@ -126,4 +132,21 @@ describe('scalePngBufferToDataUrl', () => {
 
     expect(result).toBe(`data:image/png;base64,${uint8ArrayToBase64(pngBuffer)}`);
   });
+
+	it('rejects when the PNG buffer cannot be decoded', async () => {
+		MockImage.shouldError = true;
+		MockImage.errorPayload = null;
+
+		await expect(scalePngBufferToDataUrl(pngBuffer, 800)).rejects.toThrow('Failed to load PNG buffer.');
+	});
+
+	it('surfaces ErrorEvent errors from the image decoder', async () => {
+		MockImage.shouldError = true;
+		MockImage.errorPayload = new ErrorEvent('error', {
+			message: 'png decode error',
+			error: new Error('decoder crashed'),
+		});
+
+		await expect(scalePngBufferToDataUrl(pngBuffer, 800)).rejects.toThrow('decoder crashed');
+	});
 });
