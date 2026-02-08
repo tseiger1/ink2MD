@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type { ChatCompletionChunk } from 'openai/resources/chat/completions';
 import { OpenAIVisionProvider } from 'src/llm/openaiProvider';
-import { scalePngBufferToDataUrl } from 'src/utils/pngScaler';
 import type { ConvertedNote, MarkdownStreamHandler } from 'src/types';
 
 const mockCreate = jest.fn();
