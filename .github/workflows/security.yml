@@ -12,6 +12,12 @@ on:
       lockfile:
         type: string
         default: 'package-lock.json'
+      base-ref:
+        type: string
+        default: ''
+      head-ref:
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -21,6 +27,7 @@ permissions:
 
 jobs:
   dependency-review:
+    if: inputs.base-ref != '' && inputs.head-ref != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +50,9 @@ jobs:
             exit 1
           fi
       - uses: actions/dependency-review-action@v4
+        with:
+          base-ref: ${{ inputs.base-ref }}
+          head-ref: ${{ inputs.head-ref }}
 
   osv:
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@1f1242919d8a60496dd1874b24b62b2370ed4c78
@@ -66,7 +76,7 @@ jobs:
       - name: Run Gitleaks
         run: gitleaks detect --source . --config .gitleaks.toml --redact --report-format sarif --report-path gitleaks.sarif
       - name: Upload Gitleaks SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: gitleaks.sarif
 
